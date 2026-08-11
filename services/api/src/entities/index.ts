@@ -1,0 +1,12 @@
+export { UserEntity } from './user.entity';
+export { LearningGoalEntity } from './learning-goal.entity';
+export { LearningSessionEntity } from './learning-session.entity';
+export { LearningEventEntity } from './learning-event.entity';
+export { ConceptEntity } from './concept.entity';
+export { KnowledgeNodeEntity } from './knowledge-node.entity';
+export { KnowledgeEdgeEntity } from './knowledge-edge.entity';
+export { AssessmentEntity } from './assessment.entity';
+export { AuditLogEntity } from './audit-log.entity';
+export { ChatMessageEntity } from './chat-message.entity';
+export { StudyGroupEntity } from './study-group.entity';
+export { GroupMemberEntity } from './group-member.entity';

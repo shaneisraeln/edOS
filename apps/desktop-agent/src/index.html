@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>edOS Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 16px; background: #fafafa; color: #1a1b1e; font-size: 13px; }
+    h1 { font-size: 16px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    h1 .dot { width: 8px; height: 8px; border-radius: 50%; }
+    h1 .dot.green { background: #2b8a3e; }
+    h1 .dot.red { background: #c92a2a; }
+    h1 .dot.yellow { background: #e67700; }
+    .card { background: white; border-radius: 10px; padding: 12px; margin-bottom: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .label { font-size: 10px; color: #868e96; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; font-weight: 600; }
+    .value { font-size: 13px; font-weight: 600; }
+    .value.small { font-size: 12px; font-weight: 400; color: #495057; }
+    .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+    .row:last-child { margin-bottom: 0; }
+    input { width: 100%; padding: 8px 12px; border: 1px solid #dee2e6; border-radius: 6px; font-size: 13px; margin-bottom: 6px; outline: none; }
+    input:focus { border-color: #4c6ef5; }
+    button { width: 100%; padding: 8px; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; margin-bottom: 4px; }
+    .btn-p { background: #4c6ef5; color: white; }
+    .btn-p:hover { background: #4263eb; }
+    .btn-s { background: #f1f3f5; color: #495057; }
+    .btn-s:hover { background: #e9ecef; }
+    .btn-warn { background: #fff3bf; color: #e67700; }
+    .event-item { padding: 4px 0; border-bottom: 1px solid #f1f3f5; font-size: 11px; }
+    .event-item:last-child { border-bottom: none; }
+    .event-item .topic { font-weight: 500; }
+    .event-item .meta { color: #868e96; }
+    #loginSection { display: block; }
+    #mainSection { display: none; }
+    #error { color: #c92a2a; font-size: 11px; margin-top: 4px; min-height: 14px; }
+    .current-window { background: #e7f5ff; border-radius: 6px; padding: 8px; font-size: 11px; margin-top: 6px; }
+    .current-window .title { font-weight: 600; color: #1971c2; }
+  </style>
+</head>
+<body>
+  <div id="loginSection">
+    <h1><span class="dot red"></span> edOS Agent</h1>
+    <div class="card">
+      <div class="label">Sign In to Start Monitoring</div>
+      <input type="email" id="email" placeholder="Email">
+      <input type="password" id="password" placeholder="Password">
+      <button class="btn-p" id="loginBtn">Sign In</button>
+      <p id="error"></p>
+    </div>
+  </div>
+
+  <div id="mainSection">
+    <h1><span class="dot green" id="statusDot"></span> edOS Agent</h1>
+
+    <!-- Current Activity -->
+    <div class="card">
+      <div class="label">Currently Monitoring</div>
+      <div id="currentActivity">
+        <div class="value small">Waiting for activity...</div>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="card">
+      <div class="row">
+        <span>User</span>
+        <span class="value" id="userName">—</span>
+      </div>
+      <div class="row">
+        <span>Events queued</span>
+        <span class="value" id="queueSize">0</span>
+      </div>
+      <div class="row">
+        <span>Monitoring</span>
+        <span class="value" id="monitorStatus">Active</span>
+      </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="card">
+      <div class="label">Recent Activity</div>
+      <div id="recentEvents">
+        <div class="event-item"><span class="meta">No activity yet</span></div>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <button class="btn-warn" id="toggleBtn">Pause Monitoring</button>
+    <button class="btn-s" id="logoutBtn">Sign Out</button>
+  </div>
+
+  <script>
+    const { invoke } = window.__TAURI__.tauri;
+    const { listen } = window.__TAURI__.event;
+
+    async function init() {
+      try {
+        const status = await invoke('get_status');
+        if (status.logged_in) showMain(status);
+        else showLogin();
+      } catch(e) { showLogin(); }
+    }
+
+    function showLogin() {
+      document.getElementById('loginSection').style.display = 'block';
+      document.getElementById('mainSection').style.display = 'none';
+    }
+
+    function showMain(status) {
+      document.getElementById('loginSection').style.display = 'none';
+      document.getElementById('mainSection').style.display = 'block';
+      document.getElementById('userName').textContent = status.user_name || '—';
+      updateMonitorUI(status.monitoring);
+    }
+
+    function updateMonitorUI(isOn) {
+      const dot = document.getElementById('statusDot');
+      const status = document.getElementById('monitorStatus');
+      const btn = document.getElementById('toggleBtn');
+      if (isOn) {
+        dot.className = 'dot green';
+        status.textContent = 'Active';
+        btn.textContent = 'Pause Monitoring';
+      } else {
+        dot.className = 'dot yellow';
+        status.textContent = 'Paused';
+        btn.textContent = 'Resume Monitoring';
+      }
+    }
+
+    // Login
+    document.getElementById('loginBtn').addEventListener('click', async () => {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const errorEl = document.getElementById('error');
+      errorEl.textContent = 'Connecting...';
+      errorEl.style.color = '#868e96';
+      try {
+        const name = await invoke('login', { email, password });
+        errorEl.textContent = '';
+        const status = await invoke('get_status');
+        showMain(status);
+      } catch(e) {
+        errorEl.style.color = '#c92a2a';
+        errorEl.textContent = typeof e === 'string' ? e : JSON.stringify(e);
+      }
+    });
+
+    // Logout
+    document.getElementById('logoutBtn').addEventListener('click', async () => {
+      await invoke('logout');
+      showLogin();
+    });
+
+    // Toggle monitoring
+    document.getElementById('toggleBtn').addEventListener('click', async () => {
+      const isOn = await invoke('toggle_monitoring');
+      updateMonitorUI(isOn);
+    });
+
+    // Listen for activity events from the monitor
+    listen('monitor:activity', (event) => {
+      const data = event.payload;
+      const el = document.getElementById('currentActivity');
+      el.innerHTML = `
+        <div class="current-window">
+          <div class="title">${escapeHtml(data.title)}</div>
+          <div class="meta">${data.process} • ${data.duration}s • ${data.educational ? '📚 Educational' : '—'}</div>
+        </div>
+      `;
+    });
+
+    // Poll queue size and recent events
+    setInterval(async () => {
+      try {
+        const size = await invoke('get_queue_size');
+        document.getElementById('queueSize').textContent = size;
+
+        const events = await invoke('get_recent_events');
+        if (events.length > 0) {
+          document.getElementById('recentEvents').innerHTML = events.map(e =>
+            `<div class="event-item"><span class="topic">${escapeHtml(e.topic || 'Unknown')}</span> <span class="meta">${e.source} • ${e.type}</span></div>`
+          ).join('');
+        }
+
+        // Update current window
+        const win = await invoke('get_current_window');
+        if (win.title) {
+          document.getElementById('currentActivity').innerHTML = `
+            <div class="current-window">
+              <div class="title">${escapeHtml(win.title)}</div>
+              <div class="meta">${win.process} • ${win.seconds}s • ${win.educational ? '📚 Educational' : '⏭️ Not tracked'}</div>
+            </div>
+          `;
+        }
+      } catch(e) {}
+    }, 3000);
+
+    function escapeHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    init();
+  </script>
+</body>
+</html>

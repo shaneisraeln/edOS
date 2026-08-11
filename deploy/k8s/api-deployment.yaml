@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edos-api
+  labels:
+    app: edos-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: edos-api
+  template:
+    metadata:
+      labels:
+        app: edos-api
+    spec:
+      containers:
+        - name: api
+          image: edos/api:latest
+          ports:
+            - containerPort: 3001
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3001"
+            - name: DATABASE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: edos-secrets
+                  key: database-host
+            - name: DATABASE_PORT
+              value: "5432"
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: edos-secrets
+                  key: database-user
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: edos-secrets
+                  key: database-password
+            - name: DATABASE_NAME
+              value: "edos"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: edos-secrets
+                  key: jwt-secret
+            - name: AI_PROVIDER
+              value: "groq"
+            - name: AI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: edos-secrets
+                  key: ai-api-key
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /api/auth/profile
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/auth/profile
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edos-api
+spec:
+  selector:
+    app: edos-api
+  ports:
+    - port: 3001
+      targetPort: 3001
+  type: ClusterIP

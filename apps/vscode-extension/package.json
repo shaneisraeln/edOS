@@ -1,0 +1,73 @@
+{
+  "name": "edos-vscode",
+  "displayName": "edOS",
+  "description": "Track coding activity, get quizzed on what you're learning, build your knowledge graph",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "edos.login",
+        "title": "edOS: Sign In"
+      },
+      {
+        "command": "edos.logout",
+        "title": "edOS: Sign Out"
+      },
+      {
+        "command": "edos.startSession",
+        "title": "edOS: Start Learning Session"
+      },
+      {
+        "command": "edos.endSession",
+        "title": "edOS: End Learning Session"
+      },
+      {
+        "command": "edos.toggleTracking",
+        "title": "edOS: Toggle Tracking"
+      },
+      {
+        "command": "edos.showStats",
+        "title": "edOS: Show Session Stats"
+      }
+    ],
+    "configuration": {
+      "title": "edOS",
+      "properties": {
+        "edos.apiUrl": {
+          "type": "string",
+          "default": "http://localhost:3001/api",
+          "description": "edOS API URL"
+        },
+        "edos.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable learning activity tracking"
+        },
+        "edos.quizOnIdle": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show quiz popup after 5 minutes of inactivity"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.5.0"
+  }
+}

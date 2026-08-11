@@ -1,0 +1,37 @@
+{
+  "build": {
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
+    "devPath": "../src",
+    "distDir": "../src",
+    "withGlobalTauri": true
+  },
+  "package": {
+    "productName": "edOS Agent",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "shell": { "open": true },
+      "notification": { "all": true }
+    },
+    "bundle": {
+      "active": true,
+      "identifier": "com.edos.agent",
+      "icon": ["icons/32x32.png", "icons/128x128.png", "icons/icon.ico"]
+    },
+    "windows": [
+      {
+        "title": "edOS Agent",
+        "width": 400,
+        "height": 500,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "systemTray": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  }
+}

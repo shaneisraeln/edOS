@@ -1,0 +1,22 @@
+{
+  "name": "edos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-native Learning Operating System",
+  "pnpm": {
+    "onlyBuiltDependencies": ["bcrypt", "@nestjs/core"]
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @edos/web dev",
+    "dev:api": "pnpm --filter @edos/api dev",
+    "build:web": "pnpm --filter @edos/web build",
+    "build:api": "pnpm --filter @edos/api build",
+    "db:up": "docker compose up -d postgres redis",
+    "db:down": "docker compose down",
+    "lint": "turbo run lint",
+    "build": "turbo run build"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED"
+}
