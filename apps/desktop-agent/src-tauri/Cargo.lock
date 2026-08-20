@@ -797,6 +797,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
+name = "edos-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "lazy_static",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "ureq",
+ "url",
+ "windows 0.58.0",
+]
+
+[[package]]
 name = "embed-resource"
 version = "2.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1885,22 +1901,6 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
-name = "edos-agent"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "lazy_static",
- "reqwest",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "ureq",
- "url",
- "windows 0.58.0",
-]
 
 [[package]]
 name = "libappindicator"

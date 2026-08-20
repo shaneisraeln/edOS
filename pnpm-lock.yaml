@@ -22,7 +22,7 @@ importers:
 
   apps/web:
     dependencies:
-      '@learning-os/shared':
+      '@edos/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       next:
@@ -68,7 +68,7 @@ importers:
 
   services/api:
     dependencies:
-      '@learning-os/shared':
+      '@edos/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@nestjs/common':
