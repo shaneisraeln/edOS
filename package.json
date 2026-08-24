@@ -3,18 +3,26 @@
   "version": "0.1.0",
   "private": true,
   "description": "AI-native Learning Operating System",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "pnpm": {
     "onlyBuiltDependencies": ["bcrypt", "@nestjs/core"]
   },
   "scripts": {
+    "dev": "pnpm -r --parallel run dev",
     "dev:web": "pnpm --filter @edos/web dev",
     "dev:api": "pnpm --filter @edos/api dev",
+    "build": "pnpm -r run build",
     "build:web": "pnpm --filter @edos/web build",
     "build:api": "pnpm --filter @edos/api build",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm --filter @edos/api test",
     "db:up": "docker compose up -d postgres redis",
     "db:down": "docker compose down",
-    "lint": "turbo run lint",
-    "build": "turbo run build"
+    "db:reset": "docker compose down -v && docker compose up -d postgres redis",
+    "setup": "node scripts/setup.mjs"
   },
   "keywords": [],
   "author": "",

@@ -5,7 +5,8 @@
  * when the user leaves a tab they spent meaningful time on.
  */
 
-const API_BASE = 'http://localhost:3001/api';
+import { getApiBase } from './config.js';
+
 const MIN_TIME_FOR_QUIZ = 60; // seconds minimum before triggering quiz
 
 const EDUCATIONAL_DOMAINS = [
@@ -220,7 +221,8 @@ async function triggerQuiz(data) {
   log('Sending context to API for quiz generation...', { title: data.title, timeSpent: data.timeSpent });
 
   try {
-    const res = await fetch(`${API_BASE}/context-quiz/generate`, {
+    const apiBase = await getApiBase();
+    const res = await fetch(`${apiBase}/context-quiz/generate`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -266,13 +268,18 @@ async function syncEvents() {
   eventQueue = [];
 
   try {
-    await fetch(`${API_BASE}/ingest/events`, {
+    const apiBase = await getApiBase();
+    const res = await fetch(`${apiBase}/ingest/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ events }),
     });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    saveState();
   } catch (e) {
+    // Put the batch back so nothing is lost when the API is unreachable.
     eventQueue.unshift(...events);
+    log('Event sync failed, events requeued', e.message);
   }
 }
 
@@ -302,8 +309,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'LOGOUT') {
-    chrome.storage.local.clear();
+    // Clear session data but keep the configured API endpoint, otherwise the
+    // user has to re-enter it after every sign out.
+    chrome.storage.local.remove([
+      'accessToken',
+      'refreshToken',
+      'user',
+      'pendingQuiz',
+      'trackedTabs',
+      'eventQueue',
+    ]);
     trackedTabs = {};
+    eventQueue = [];
     trackingEnabled = true;
     sendResponse({ ok: true });
   }

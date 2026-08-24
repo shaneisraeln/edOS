@@ -9,6 +9,7 @@
     "target": "ES2022",
     "sourceMap": true,
     "outDir": "./dist",
+    "rootDir": "./src",
     "baseUrl": "./",
     "incremental": true,
     "skipLibCheck": true,
@@ -17,5 +18,12 @@
     "strictBindCallApply": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true
-  }
+  },
+  // rootDir + include must stay pinned to src. Without them TypeScript infers
+  // the common root from all inputs (which includes jest.config.ts at the
+  // package root) and emits to dist/src/main.js instead of dist/main.js —
+  // silently breaking `start:prod`, the Docker CMD, and the production
+  // migrations glob in app.module.ts.
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "jest.config.ts", "**/*.spec.ts"]
 }

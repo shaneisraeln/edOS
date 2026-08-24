@@ -25,34 +25,41 @@ export default function RegisterPage() {
       localStorage.setItem('user', JSON.stringify(result.user));
       router.push('/onboarding');
     } catch (err: any) {
-      setError(err.message || 'Registration failed');
+      setError(err.message || 'Could not create your account');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold">Create your account</h1>
-          <p className="text-sm text-gray-500">Start measuring what you actually know</p>
-        </div>
+    <main className="flex min-h-screen items-center justify-center px-6 py-12">
+      <div className="w-full max-w-[340px] animate-in">
+        <Link href="/" className="eyebrow hover:text-gray-900 dark:hover:text-gray-100">
+          edOS
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold text-gray-900 dark:text-gray-50">
+          Create account
+        </h1>
+        <p className="mt-1 text-sm muted">Start measuring what you actually know.</p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="mt-8 space-y-4" noValidate>
           {error && (
-            <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
+            <p
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-400"
+            >
               {error}
-            </div>
+            </p>
           )}
 
-          <div className="space-y-2">
-            <label htmlFor="name" className="text-sm font-medium">
+          <div>
+            <label htmlFor="name" className="label">
               Name
             </label>
             <input
               id="name"
               type="text"
+              autoComplete="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="input"
@@ -61,13 +68,14 @@ export default function RegisterPage() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label htmlFor="email" className="text-sm font-medium">
+          <div>
+            <label htmlFor="email" className="label">
               Email
             </label>
             <input
               id="email"
               type="email"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="input"
@@ -76,30 +84,35 @@ export default function RegisterPage() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium">
+          <div>
+            <label htmlFor="password" className="label">
               Password
             </label>
             <input
               id="password"
               type="password"
+              autoComplete="new-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input"
-              placeholder="Min. 8 characters"
+              placeholder="At least 8 characters"
               minLength={8}
               required
             />
+            <p className="mt-1.5 text-[11px] muted">Minimum 8 characters.</p>
           </div>
 
           <button type="submit" className="btn-primary w-full" disabled={loading}>
-            {loading ? 'Creating account...' : 'Create Account'}
+            {loading ? 'Creating account' : 'Create account'}
           </button>
         </form>
 
-        <p className="text-center text-sm text-gray-500">
+        <p className="mt-6 text-xs muted">
           Already have an account?{' '}
-          <Link href="/login" className="text-primary-600 hover:text-primary-700 font-medium">
+          <Link
+            href="/login"
+            className="font-medium text-gray-900 underline decoration-gray-300 underline-offset-2 hover:decoration-gray-500 dark:text-gray-100 dark:decoration-gray-600"
+          >
             Sign in
           </Link>
         </p>

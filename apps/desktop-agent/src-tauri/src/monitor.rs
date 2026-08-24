@@ -47,31 +47,75 @@ const EDUCATIONAL_KEYWORDS: &[&str] = &[
     "sql", "database", "postgresql", "mongodb",
 ];
 
-fn is_educational(title: &str) -> bool {
-    let lower = title.to_lowercase();
+fn is_educational(text: &str) -> bool {
+    let lower = text.to_lowercase();
     EDUCATIONAL_KEYWORDS.iter().any(|kw| lower.contains(kw))
+        || EDUCATIONAL_APPS.iter().any(|app| lower.contains(app))
 }
 
-#[cfg(windows)]
-fn get_active_window_title() -> Option<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return None;
+/// Applications that are themselves a strong signal of learning activity.
+/// On macOS the window title is unavailable without Screen Recording
+/// permission, so the application name is often all we have to work with.
+const EDUCATIONAL_APPS: &[&str] = &[
+    "code", "visual studio code", "cursor", "zed", "sublime text",
+    "intellij", "pycharm", "webstorm", "goland", "clion", "rustrover",
+    "xcode", "android studio", "jupyter", "rstudio",
+    "terminal", "iterm", "warp", "alacritty", "kitty",
+    "preview", "books", "obsidian", "notion", "zotero",
+];
+
+/// A snapshot of whatever the user currently has in the foreground.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveWindowSnapshot {
+    pub title: String,
+    pub app_name: String,
+}
+
+impl ActiveWindowSnapshot {
+    /// Text used for educational keyword matching. The app name is included
+    /// because macOS hides window titles unless Screen Recording is granted.
+    fn searchable(&self) -> String {
+        format!("{} {}", self.app_name, self.title)
+    }
+
+    /// A stable identity for "the thing the user is looking at". Used to detect
+    /// context switches. Falls back to the app name when the title is hidden.
+    pub fn identity(&self) -> String {
+        if self.title.trim().is_empty() {
+            self.app_name.clone()
+        } else {
+            format!("{} — {}", self.app_name, self.title)
         }
-        let mut buf = [0u16; 512];
-        let len = GetWindowTextW(hwnd, &mut buf);
-        if len == 0 {
-            return None;
-        }
-        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.title.trim().is_empty() && self.app_name.trim().is_empty()
     }
 }
 
-#[cfg(not(windows))]
-fn get_active_window_title() -> Option<String> {
-    None
+/// Read the foreground window on macOS, Windows, or Linux.
+///
+/// Backed by `active-win-pos-rs`, so there is a single code path for every
+/// platform instead of a Windows-only implementation with a stub elsewhere.
+///
+/// macOS note: `title` comes back empty unless the user grants Screen
+/// Recording permission to the agent. `app_name` is always populated, so
+/// detection degrades gracefully rather than failing outright.
+fn get_active_window_snapshot() -> Option<ActiveWindowSnapshot> {
+    match active_win_pos_rs::get_active_window() {
+        Ok(window) => {
+            let snapshot = ActiveWindowSnapshot {
+                title: window.title,
+                app_name: window.app_name,
+            };
+            if snapshot.is_empty() {
+                None
+            } else {
+                Some(snapshot)
+            }
+        }
+        Err(_) => None,
+    }
 }
 
 const MIN_QUIZ_TIME: u64 = 60;
@@ -84,7 +128,7 @@ pub fn start_monitor(
     monitor_state: &'static MonitorState,
 ) {
     thread::spawn(move || {
-        let mut last_title = String::new();
+        let mut last: Option<ActiveWindowSnapshot> = None;
         let mut window_start = Instant::now();
 
         loop {
@@ -95,46 +139,59 @@ pub fn start_monitor(
                 continue;
             }
 
-            let title = match get_active_window_title() {
-                Some(t) if !t.is_empty() => t,
-                _ => continue,
+            let current = match get_active_window_snapshot() {
+                Some(snapshot) => snapshot,
+                None => continue,
             };
 
-            // Update UI state
-            let edu = is_educational(&title);
+            // Update the state the UI reads.
+            let edu = is_educational(&current.searchable());
             let elapsed = window_start.elapsed().as_secs();
             {
                 let mut cw = monitor_state.current_window.lock().unwrap();
-                cw.title = title.clone();
+                cw.title = current.identity();
+                cw.process_name = current.app_name.clone();
                 cw.is_educational = edu;
                 cw.seconds = elapsed;
             }
 
-            // Window changed — process the old one
-            if title != last_title {
-                let time_on_old = window_start.elapsed().as_secs();
-                let was_edu = is_educational(&last_title);
+            // Context switched — process the window the user just left.
+            let switched = last
+                .as_ref()
+                .map(|prev| prev.identity() != current.identity())
+                .unwrap_or(true);
 
-                if !last_title.is_empty() && was_edu && time_on_old >= MIN_EVENT_TIME {
-                    // Log event
-                    event_queue.push(LearningEvent {
-                        event_type: "WindowFocused".to_string(),
-                        source: "desktop".to_string(),
-                        timestamp: chrono::Utc::now().to_rfc3339(),
-                        topic: Some(last_title.clone()),
-                        metadata: serde_json::json!({
-                            "duration_seconds": time_on_old,
-                            "window_title": last_title,
-                        }),
-                    });
+            if switched {
+                if let Some(prev) = last.take() {
+                    let time_on_old = window_start.elapsed().as_secs();
+                    let was_edu = is_educational(&prev.searchable());
 
-                    // Trigger quiz if spent 60+ seconds
-                    if time_on_old >= MIN_QUIZ_TIME {
-                        quiz::trigger_quiz(&app_handle, app_state, &last_title, time_on_old);
+                    if was_edu && time_on_old >= MIN_EVENT_TIME {
+                        event_queue.push(LearningEvent {
+                            event_type: "WindowFocused".to_string(),
+                            source: "desktop".to_string(),
+                            timestamp: chrono::Utc::now().to_rfc3339(),
+                            topic: Some(prev.identity()),
+                            metadata: serde_json::json!({
+                                "duration_seconds": time_on_old,
+                                "window_title": prev.title,
+                                "app_name": prev.app_name,
+                            }),
+                        });
+
+                        // Trigger a quiz once they've spent real time on it.
+                        if time_on_old >= MIN_QUIZ_TIME {
+                            quiz::trigger_quiz(
+                                &app_handle,
+                                app_state,
+                                &prev.identity(),
+                                time_on_old,
+                            );
+                        }
                     }
                 }
 
-                last_title = title;
+                last = Some(current);
                 window_start = Instant::now();
             }
         }

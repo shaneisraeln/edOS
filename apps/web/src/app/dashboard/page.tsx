@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { api } from '@/lib/api';
+import { Icon } from '@/components/icon';
 
 interface DashboardData {
   user: any;
@@ -37,8 +39,7 @@ export default function DashboardPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
+    if (!localStorage.getItem('accessToken')) {
       router.push('/login');
       return;
     }
@@ -46,6 +47,7 @@ export default function DashboardPage() {
   }, []);
 
   const loadData = async () => {
+    setError('');
     try {
       const [dashResult, progressResult] = await Promise.all([
         api.getDashboard(),
@@ -65,20 +67,15 @@ export default function DashboardPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full min-h-[60vh]">
-        <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-100 rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return <DashboardSkeleton />;
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full min-h-[60vh]">
-        <div className="text-center space-y-3">
-          <p className="text-sm text-red-500">{error}</p>
-          <button onClick={loadData} className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+      <div className="flex min-h-[60vh] items-center justify-center px-6">
+        <div className="space-y-3 text-center">
+          <p className="text-sm text-gray-900 dark:text-gray-100">Could not load your dashboard</p>
+          <p className="text-sm muted">{error}</p>
+          <button onClick={loadData} className="btn-secondary mt-1">
             Try again
           </button>
         </div>
@@ -88,154 +85,172 @@ export default function DashboardPage() {
 
   if (!data) return null;
 
+  const { stats } = data;
+  const firstName = data.user?.name?.split(' ')[0] || 'there';
+
   return (
-    <div className="p-6 md:p-10 max-w-4xl mx-auto space-y-10">
-      {/* Greeting */}
-      <header className="flex items-start justify-between">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">
-            {getGreeting()}, {data.user?.name?.split(' ')[0] || 'there'}
+    <div className="mx-auto max-w-4xl space-y-8 px-6 py-8 md:px-10 md:py-10 animate-in">
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="page-title">
+            {getGreeting()}, {firstName}
           </h1>
-        {data.currentGoal ? (
-          <p className="text-sm text-gray-500">
-            Studying {data.currentGoal.curriculumName} · {data.stats.streak} day streak
-          </p>
-        ) : (
-          <p className="text-sm text-gray-500">
-            {data.stats.streak > 0 ? `${data.stats.streak} day streak` : 'Ready to learn something new?'}
-          </p>
-        )}
+          <p className="mt-1 text-sm muted">{buildSubtitle(data)}</p>
         </div>
         <NotificationBell />
       </header>
 
-      {/* Learning Path */}
-      <button
-        onClick={() => router.push('/dashboard/paths')}
-        className="w-full group rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface p-6 text-left transition-all hover:border-primary-300 dark:hover:border-primary-700 hover:shadow-sm"
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-xl bg-primary-50 dark:bg-primary-900/20 flex items-center justify-center">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-primary-600">
-                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-primary-600 transition-colors">
-                Learning Paths
-              </p>
-              <p className="text-xs text-gray-400">
-                Structured plans with step-by-step verification
-              </p>
-            </div>
-          </div>
-          <span className="text-gray-300 dark:text-gray-600 group-hover:text-primary-400 transition-colors">→</span>
-        </div>
-      </button>
-
-      {/* Start session CTA */}
-      <button
-        onClick={() => router.push('/dashboard/session')}
-        className="w-full group rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface p-6 text-left transition-all hover:border-primary-300 dark:hover:border-primary-700 hover:shadow-sm"
-      >
-        <div className="flex items-center justify-between">
-          <div className="space-y-1">
-            <p className="text-base font-medium text-gray-900 dark:text-gray-100 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">
-              Start a learning session
-            </p>
-            <p className="text-sm text-gray-400">
-              Focus timer with knowledge checks every 10 min
-            </p>
-          </div>
-          <div className="w-10 h-10 rounded-full bg-primary-50 dark:bg-primary-900/20 flex items-center justify-center group-hover:bg-primary-100 dark:group-hover:bg-primary-900/30 transition-colors">
-            <svg className="w-5 h-5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-            </svg>
-          </div>
-        </div>
-      </button>
-
-      {/* Activity heatmap */}
-      <Heatmap dailySessions={progress?.dailySessions || []} />
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-3">
-        <Stat label="Mastery" value={`${data.stats.averageMastery}%`} />
-        <Stat label="Study time" value={formatMinutes(data.stats.totalLearningMinutes)} />
-        <Stat label="Concepts" value={`${data.stats.conceptCount}`} />
-        <Stat label="Assessments" value={`${data.stats.completedAssessments}`} />
+      {/* Primary actions */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ActionCard
+          href="/dashboard/session"
+          title="Start a focus session"
+          description="Timed session with knowledge checks as you go"
+          icon="play"
+        />
+        <ActionCard
+          href="/dashboard/paths"
+          title="Continue a learning path"
+          description="Step-by-step plans you verify as you finish"
+          icon="path"
+        />
       </div>
 
-      {/* Needs review */}
-      {data.weakConcepts.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Needs review</h2>
-          <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface divide-y divide-gray-100 dark:divide-gray-800">
-            {data.weakConcepts.slice(0, 4).map((n: any) => (
-              <div key={n.id} className="flex items-center justify-between px-5 py-3.5">
-                <span className="text-sm text-gray-700 dark:text-gray-300">{n.concept?.name || 'Unknown'}</span>
-                <span className="text-xs tabular-nums font-medium text-orange-500">{n.weaknessScore}%</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Recent sessions */}
-      {data.recentSessions.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Recent sessions</h2>
-          <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface divide-y divide-gray-100 dark:divide-gray-800">
-            {data.recentSessions.slice(0, 4).map((s: any) => (
-              <div key={s.id} className="flex items-center justify-between px-5 py-3.5">
-                <span className="text-sm text-gray-700 dark:text-gray-300 truncate">{s.topic}</span>
-                <span className="text-xs tabular-nums text-gray-400 ml-3 flex-shrink-0">
-                  {s.duration ? formatMinutes(Math.round(s.duration / 60)) : 'Active'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Quick Navigation */}
-      <section className="space-y-3">
-        <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Explore</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {[
-            { href: '/dashboard/assessment', label: 'Assessment' },
-            { href: '/dashboard/graph', label: 'Knowledge Graph' },
-            { href: '/dashboard/mentor', label: 'AI Mentor' },
-            { href: '/dashboard/quiz', label: 'Context Quiz' },
-            { href: '/dashboard/projects', label: 'Projects' },
-            { href: '/dashboard/groups', label: 'Study Groups' },
-            { href: '/dashboard/interview', label: 'Interview Prep' },
-            { href: '/dashboard/history', label: 'History' },
-            { href: '/dashboard/timeline', label: 'Timeline' },
-            { href: '/dashboard/settings', label: 'Settings' },
-          ].map((item) => (
-            <button
-              key={item.href}
-              onClick={() => router.push(item.href)}
-              className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface px-4 py-3 text-left text-sm text-gray-700 dark:text-gray-300 hover:border-primary-300 dark:hover:border-primary-700 hover:text-primary-600 transition-all"
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
+      {/* Stats */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Mastery" value={`${stats.averageMastery}%`} />
+        <Stat label="Study time" value={formatMinutes(stats.totalLearningMinutes)} />
+        <Stat label="Concepts" value={String(stats.conceptCount)} />
+        <Stat label="Assessments" value={String(stats.completedAssessments)} />
       </section>
+
+      <Heatmap dailySessions={progress?.dailySessions || []} />
+
+      <div className="grid gap-6 md:grid-cols-2">
+        <Panel
+          title="Needs review"
+          empty="Nothing flagged yet. Take an assessment to find gaps."
+          isEmpty={data.weakConcepts.length === 0}
+          action={{ href: '/dashboard/graph', label: 'View graph' }}
+        >
+          {data.weakConcepts.slice(0, 5).map((n: any) => (
+            <div key={n.id} className="list-row">
+              <span className="truncate text-sm">{n.concept?.name || 'Unknown'}</span>
+              <span className="shrink-0 text-2xs tabular-nums muted">{n.weaknessScore}% weak</span>
+            </div>
+          ))}
+        </Panel>
+
+        <Panel
+          title="Recent sessions"
+          empty="No sessions yet. Start one above."
+          isEmpty={data.recentSessions.length === 0}
+          action={{ href: '/dashboard/history', label: 'View all' }}
+        >
+          {data.recentSessions.slice(0, 5).map((s: any) => (
+            <div key={s.id} className="list-row">
+              <span className="truncate text-sm">{s.topic}</span>
+              <span className="shrink-0 text-2xs tabular-nums muted">
+                {s.duration ? formatMinutes(Math.round(s.duration / 60)) : 'Active'}
+              </span>
+            </div>
+          ))}
+        </Panel>
+      </div>
     </div>
   );
 }
 
-// --- Components ---
+/* ------------------------------------------------------------------ pieces */
+
+function ActionCard({
+  href,
+  title,
+  description,
+  icon,
+}: {
+  href: string;
+  title: string;
+  description: string;
+  icon: 'play' | 'path';
+}) {
+  return (
+    <Link href={href} className="card-interactive group flex items-start gap-3.5">
+      <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border text-gray-500 dark:text-gray-400">
+        <Icon name={icon} className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">{title}</span>
+        <span className="mt-0.5 block text-xs muted">{description}</span>
+      </span>
+      <Icon
+        name="arrow-right"
+        className="mt-1.5 h-3.5 w-3.5 shrink-0 text-gray-300 transition-transform group-hover:translate-x-0.5 dark:text-gray-600"
+      />
+    </Link>
+  );
+}
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface px-4 py-3.5 text-center">
-      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{value}</p>
-      <p className="text-[11px] text-gray-400 mt-0.5">{label}</p>
+    <div className="card p-4">
+      <p className="text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">{value}</p>
+      <p className="mt-0.5 text-2xs muted">{label}</p>
+    </div>
+  );
+}
+
+function Panel({
+  title,
+  children,
+  isEmpty,
+  empty,
+  action,
+}: {
+  title: string;
+  children: React.ReactNode;
+  isEmpty: boolean;
+  empty: string;
+  action?: { href: string; label: string };
+}) {
+  return (
+    <section className="space-y-2.5">
+      <div className="flex items-baseline justify-between">
+        <h2 className="section-title">{title}</h2>
+        {action && !isEmpty && (
+          <Link href={action.href} className="text-2xs muted hover:text-gray-900 dark:hover:text-gray-100">
+            {action.label}
+          </Link>
+        )}
+      </div>
+      {isEmpty ? (
+        <div className="card">
+          <p className="text-xs muted">{empty}</p>
+        </div>
+      ) : (
+        <div className="list">{children}</div>
+      )}
+    </section>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="mx-auto max-w-4xl space-y-8 px-6 py-8 md:px-10 md:py-10">
+      <div className="space-y-2">
+        <div className="skeleton h-7 w-56" />
+        <div className="skeleton h-4 w-40" />
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="skeleton h-[74px]" />
+        <div className="skeleton h-[74px]" />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, i) => (
+          <div key={i} className="skeleton h-[70px]" />
+        ))}
+      </div>
+      <div className="skeleton h-[168px]" />
     </div>
   );
 }
@@ -243,9 +258,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 function Heatmap({ dailySessions }: { dailySessions: DayActivity[] }) {
   const { weeks, months, totalSessions } = useMemo(() => {
     const today = new Date();
-    const dayOfWeek = today.getDay(); // 0=Sun
-
-    // 52 full weeks + partial current week
+    const dayOfWeek = today.getDay();
     const totalDays = 52 * 7 + dayOfWeek + 1;
 
     const sessionMap = new Map<string, DayActivity>();
@@ -269,80 +282,80 @@ function Heatmap({ dailySessions }: { dailySessions: DayActivity[] }) {
       days.push({ date: dateStr, level, count: sessions, minutes: Math.round(duration / 60) });
     }
 
-    const weeks: typeof days[] = [];
-    for (let i = 0; i < days.length; i += 7) {
-      weeks.push(days.slice(i, i + 7));
-    }
+    const weeks: (typeof days)[] = [];
+    for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
 
-    // Month labels
     const months: { label: string; col: number }[] = [];
     let lastMonth = -1;
     weeks.forEach((week, wi) => {
-      if (week[0]) {
-        const month = new Date(week[0].date).getMonth();
-        if (month !== lastMonth) {
-          months.push({ label: new Date(week[0].date).toLocaleString('default', { month: 'short' }), col: wi });
-          lastMonth = month;
-        }
+      if (!week[0]) return;
+      const month = new Date(week[0].date).getMonth();
+      if (month !== lastMonth) {
+        months.push({
+          label: new Date(week[0].date).toLocaleString('default', { month: 'short' }),
+          col: wi,
+        });
+        lastMonth = month;
       }
     });
 
-    const totalSessions = days.reduce((sum, d) => sum + d.count, 0);
-    return { weeks, months, totalSessions };
+    return { weeks, months, totalSessions: days.reduce((sum, d) => sum + d.count, 0) };
   }, [dailySessions]);
 
-  const colors = [
-    'bg-gray-100 dark:bg-gray-800/50',
-    'bg-emerald-200 dark:bg-emerald-900/40',
-    'bg-emerald-400 dark:bg-emerald-700/60',
-    'bg-emerald-600 dark:bg-emerald-500/70',
-    'bg-emerald-800 dark:bg-emerald-400/90',
+  // Monochrome ramp — reads as intensity rather than decoration.
+  const levels = [
+    'bg-gray-100 dark:bg-gray-800',
+    'bg-primary-200 dark:bg-primary-900',
+    'bg-primary-300 dark:bg-primary-800',
+    'bg-primary-500 dark:bg-primary-600',
+    'bg-primary-700 dark:bg-primary-400',
   ];
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Activity</h2>
-        <span className="text-xs text-gray-400">{totalSessions} sessions this year</span>
+    <section className="space-y-2.5">
+      <div className="flex items-baseline justify-between">
+        <h2 className="section-title">Activity</h2>
+        <span className="text-2xs muted">{totalSessions} sessions in the last year</span>
       </div>
 
-      <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface p-5 overflow-x-auto">
-        <div className="inline-flex gap-0 min-w-fit">
-          {/* Day labels */}
-          <div className="flex flex-col gap-[3px] mr-2 pt-5">
+      <div className="card overflow-x-auto">
+        <div className="inline-flex min-w-fit">
+          <div className="mr-2 flex flex-col gap-[3px] pt-[18px]">
             {['', 'M', '', 'W', '', 'F', ''].map((label, i) => (
-              <div key={i} className="h-[11px] flex items-center">
-                <span className="text-[10px] text-gray-300 dark:text-gray-600 leading-none w-3">{label}</span>
+              <div key={i} className="flex h-[11px] items-center">
+                <span className="w-3 text-[9px] leading-none text-gray-400 dark:text-gray-600">
+                  {label}
+                </span>
               </div>
             ))}
           </div>
 
           <div>
-            {/* Month labels */}
-            <div className="flex gap-[3px] mb-1.5 h-3.5">
+            <div className="mb-1.5 flex h-3 gap-[3px]">
               {weeks.map((_, wi) => {
-                const m = months.find((m) => m.col === wi);
+                const m = months.find((mm) => mm.col === wi);
                 return (
                   <div key={wi} className="w-[11px]">
-                    {m && <span className="text-[10px] text-gray-400 leading-none">{m.label}</span>}
+                    {m && (
+                      <span className="text-[9px] leading-none muted">{m.label}</span>
+                    )}
                   </div>
                 );
               })}
             </div>
 
-            {/* Grid */}
             <div className="flex gap-[3px]">
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex flex-col gap-[3px]">
                   {week.map((day) => (
                     <div
                       key={day.date}
-                      className={`w-[11px] h-[11px] rounded-[2px] ${colors[day.level]}`}
-                      title={`${day.date}: ${day.count} sessions, ${day.minutes} min`}
+                      className={`h-[11px] w-[11px] rounded-[2px] ${levels[day.level]}`}
+                      title={`${day.date} — ${day.count} session${day.count === 1 ? '' : 's'}, ${day.minutes} min`}
                     />
                   ))}
-                  {week.length < 7 && Array.from({ length: 7 - week.length }).map((_, i) => (
-                    <div key={`e-${i}`} className="w-[11px] h-[11px]" />
+                  {Array.from({ length: 7 - week.length }).map((_, i) => (
+                    <div key={`pad-${i}`} className="h-[11px] w-[11px]" />
                   ))}
                 </div>
               ))}
@@ -350,25 +363,23 @@ function Heatmap({ dailySessions }: { dailySessions: DayActivity[] }) {
           </div>
         </div>
 
-        {/* Legend */}
-        <div className="flex items-center justify-end gap-1.5 mt-4">
-          <span className="text-[10px] text-gray-400">Less</span>
-          {colors.map((c, i) => (
-            <div key={i} className={`w-[10px] h-[10px] rounded-[2px] ${c}`} />
+        <div className="mt-3.5 flex items-center justify-end gap-1.5">
+          <span className="text-[9px] muted">Less</span>
+          {levels.map((c, i) => (
+            <div key={i} className={`h-[9px] w-[9px] rounded-[2px] ${c}`} />
           ))}
-          <span className="text-[10px] text-gray-400">More</span>
+          <span className="text-[9px] muted">More</span>
         </div>
       </div>
     </section>
   );
 }
 
-// --- Helpers ---
-
 function NotificationBell() {
   const [count, setCount] = useState(0);
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<any[]>([]);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     loadCount();
@@ -376,64 +387,113 @@ function NotificationBell() {
     return () => clearInterval(interval);
   }, []);
 
+  // Close on outside click / Escape — the previous version stayed open.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   const loadCount = async () => {
     try {
       const data = await api.request<any>('/notifications/unread-count');
       setCount(data.count || 0);
-    } catch {}
+    } catch {
+      /* non-critical */
+    }
   };
 
-  const loadNotifications = async () => {
-    try {
-      const data = await api.request<any[]>('/notifications?status=unread');
-      setNotifications(data || []);
-    } catch {}
-  };
-
-  const toggle = () => {
-    if (!open) loadNotifications();
-    setOpen(!open);
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next) {
+      try {
+        setNotifications((await api.request<any[]>('/notifications?status=unread')) || []);
+      } catch {
+        setNotifications([]);
+      }
+    }
   };
 
   const markAllRead = async () => {
-    await api.request<any>('/notifications/mark-all-read', { method: 'POST', body: '{}' });
+    try {
+      await api.request<any>('/notifications/mark-all-read', { method: 'POST', body: '{}' });
+    } catch {
+      /* non-critical */
+    }
     setCount(0);
     setNotifications([]);
     setOpen(false);
   };
 
   return (
-    <div className="relative">
-      <button onClick={toggle} className="relative p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-dark-tertiary">
-        <span className="text-lg">🔔</span>
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={toggle}
+        className="btn-ghost relative px-2"
+        aria-label={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}
+        aria-expanded={open}
+      >
+        <Icon name="bell" className="h-[18px] w-[18px]" />
         {count > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+          <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[9px] font-medium tabular-nums text-white">
             {count > 9 ? '9+' : count}
           </span>
         )}
       </button>
+
       {open && (
-        <div className="absolute right-0 top-10 w-72 bg-white dark:bg-dark-surface border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg z-50 overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100 dark:border-gray-800">
-            <span className="text-xs font-semibold text-gray-500">Notifications</span>
+        <div className="absolute right-0 top-11 z-50 w-72 overflow-hidden rounded-xl border bg-surface shadow-pop animate-in dark:bg-dark-surface">
+          <div className="flex items-center justify-between border-b px-3.5 py-2.5">
+            <span className="text-2xs font-medium muted">Notifications</span>
             {notifications.length > 0 && (
-              <button onClick={markAllRead} className="text-[10px] text-primary-600 hover:underline">Mark all read</button>
+              <button onClick={markAllRead} className="text-2xs text-primary-600 hover:underline dark:text-primary-400">
+                Mark all read
+              </button>
             )}
           </div>
-          <div className="max-h-60 overflow-y-auto">
-            {notifications.length > 0 ? notifications.map((n: any) => (
-              <div key={n.id} className="px-3 py-2 border-b border-gray-50 dark:border-gray-800 last:border-0">
-                <p className="text-xs text-gray-700 dark:text-gray-300">{n.message}</p>
-                <p className="text-[10px] text-gray-400 mt-0.5">{new Date(n.createdAt).toLocaleDateString()}</p>
-              </div>
-            )) : (
-              <p className="text-xs text-gray-400 text-center py-4">No new notifications</p>
+          <div className="max-h-64 overflow-y-auto">
+            {notifications.length > 0 ? (
+              notifications.map((n: any) => (
+                <div key={n.id} className="border-b px-3.5 py-2.5 last:border-0">
+                  <p className="text-xs text-gray-700 dark:text-gray-300">{n.message}</p>
+                  <p className="mt-0.5 text-[10px] muted">
+                    {new Date(n.createdAt).toLocaleDateString()}
+                  </p>
+                </div>
+              ))
+            ) : (
+              <p className="px-3.5 py-6 text-center text-xs muted">Nothing new</p>
             )}
           </div>
         </div>
       )}
     </div>
   );
+}
+
+/* ----------------------------------------------------------------- helpers */
+
+function buildSubtitle(data: DashboardData): string {
+  const bits: string[] = [];
+  if (data.currentGoal?.curriculumName) bits.push(`Studying ${data.currentGoal.curriculumName}`);
+  if (data.stats.streak > 0) {
+    bits.push(`${data.stats.streak} day streak`);
+  } else if (bits.length === 0) {
+    return 'Ready to learn something new?';
+  }
+  return bits.join(' · ');
 }
 
 function getGreeting() {
@@ -444,6 +504,7 @@ function getGreeting() {
 }
 
 function formatMinutes(min: number): string {
+  if (!min) return '0m';
   if (min < 60) return `${min}m`;
   const h = Math.floor(min / 60);
   const m = min % 60;

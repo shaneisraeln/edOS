@@ -17,10 +17,28 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // CORS
+  // In development the API is called from several local origins: the Next.js
+  // dev server (whatever port it lands on), the Tauri desktop agent, the
+  // Chrome extension, and the VS Code extension. Allow those rather than
+  // hardcoding a single port. Production stays locked to FRONTEND_URL.
+  const devOriginAllowed = (origin?: string) => {
+    if (!origin) return true; // curl, native agents, same-origin requests
+    return (
+      /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(origin) ||
+      /^tauri:\/\//.test(origin) ||
+      /^chrome-extension:\/\//.test(origin) ||
+      /^moz-extension:\/\//.test(origin) ||
+      /^vscode-webview:\/\//.test(origin)
+    );
+  };
+
   app.enableCors({
     origin: isProduction
       ? (process.env.FRONTEND_URL || 'https://edos.app')
-      : ['http://localhost:3000', 'http://localhost:3001'],
+      : (origin, callback) =>
+          devOriginAllowed(origin)
+            ? callback(null, true)
+            : callback(new Error(`Origin not allowed by CORS: ${origin}`)),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

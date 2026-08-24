@@ -2,51 +2,190 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Component classes below keep the names the pages already use
+ * (.card, .btn-primary, .btn-secondary, .input, .animate-in) so restyling
+ * lands everywhere without editing every page.
+ */
+
 @layer base {
   :root {
-    --background: 255 255 255;
-    --foreground: 26 27 30;
+    color-scheme: light;
   }
 
   .dark {
-    --background: 26 27 30;
-    --foreground: 255 255 255;
+    color-scheme: dark;
+  }
+
+  * {
+    /* Hairline borders by default, so `border` never looks heavy. */
+    border-color: theme('colors.gray.200');
+  }
+
+  .dark * {
+    border-color: theme('colors.gray.800');
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
   }
 
   body {
-    @apply bg-white text-gray-900 dark:bg-dark dark:text-gray-100 antialiased;
+    @apply bg-surface-secondary text-gray-900 antialiased;
+    @apply dark:bg-dark dark:text-gray-100;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Consistent, visible focus for keyboard users only. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-primary-500/50 ring-offset-2;
+    @apply ring-offset-surface dark:ring-offset-dark;
+  }
+
+  /* Quieter scrollbars. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 dark:bg-gray-700;
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400 dark:bg-gray-600;
+  }
+
+  /* Numbers in tables/stats should not jitter. */
+  .tabular,
+  [class*='tabular-nums'] {
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
+  /* ------------------------------------------------------------ surfaces */
+
   .card {
-    @apply rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface p-6;
+    @apply rounded-xl border bg-surface p-5 dark:bg-dark-surface;
+  }
+
+  /* A card that is itself a link/button. */
+  .card-interactive {
+    @apply card w-full text-left transition-colors;
+    @apply hover:border-gray-300 dark:hover:border-gray-700;
+  }
+
+  /* Vertically stacked rows inside a bordered container. */
+  .list {
+    @apply divide-y overflow-hidden rounded-xl border bg-surface dark:bg-dark-surface;
+  }
+
+  .list-row {
+    @apply flex items-center justify-between gap-3 px-4 py-3;
+  }
+
+  /* ------------------------------------------------------------- typography */
+
+  .eyebrow {
+    @apply text-2xs font-medium text-gray-500 dark:text-gray-400;
+  }
+
+  .page-title {
+    @apply text-2xl font-semibold text-gray-900 dark:text-gray-50;
+  }
+
+  .section-title {
+    @apply text-sm font-medium text-gray-900 dark:text-gray-100;
+  }
+
+  .muted {
+    @apply text-gray-500 dark:text-gray-400;
+  }
+
+  /* --------------------------------------------------------------- buttons */
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium;
+    @apply transition-colors disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .btn-primary {
-    @apply inline-flex items-center justify-center rounded-xl bg-gray-900 dark:bg-gray-100 px-4 py-2.5 text-sm font-medium text-white dark:text-gray-900 transition-all hover:bg-gray-800 dark:hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply btn bg-gray-900 text-white hover:bg-gray-800;
+    @apply dark:bg-gray-100 dark:text-gray-900 dark:hover:bg-white;
   }
 
   .btn-secondary {
-    @apply inline-flex items-center justify-center rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-dark-surface px-4 py-2.5 text-sm font-medium text-gray-700 dark:text-gray-300 transition-all hover:bg-gray-50 dark:hover:bg-dark-tertiary focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2;
+    @apply btn border bg-surface text-gray-700 hover:bg-gray-100;
+    @apply dark:bg-dark-surface dark:text-gray-300 dark:hover:bg-dark-tertiary;
   }
 
-  .input {
-    @apply block w-full rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-dark-surface px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:border-gray-400 dark:focus:border-gray-500 focus:outline-none focus:ring-1 focus:ring-gray-400 transition-colors;
+  .btn-ghost {
+    @apply btn text-gray-500 hover:bg-gray-100 hover:text-gray-900;
+    @apply dark:text-gray-400 dark:hover:bg-dark-tertiary dark:hover:text-gray-100;
+  }
+
+  .btn-accent {
+    @apply btn bg-primary-600 text-white hover:bg-primary-700;
+  }
+
+  /* ---------------------------------------------------------------- inputs */
+
+  .input,
+  .textarea,
+  .select {
+    @apply block w-full rounded-lg border bg-surface px-3 py-2 text-sm text-gray-900;
+    @apply placeholder:text-gray-400 transition-colors;
+    @apply focus:border-primary-500 focus:outline-none focus:ring-4 focus:ring-primary-500/10;
+    @apply dark:bg-dark-surface dark:text-gray-100 dark:placeholder:text-gray-500;
+  }
+
+  .textarea {
+    @apply min-h-[88px] resize-y leading-relaxed;
+  }
+
+  .label {
+    @apply mb-1.5 block text-2xs font-medium text-gray-500 dark:text-gray-400;
+  }
+
+  /* ----------------------------------------------------------------- misc */
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-2xs;
+    @apply text-gray-600 dark:text-gray-400;
+  }
+
+  .dot {
+    @apply h-1.5 w-1.5 shrink-0 rounded-full bg-gray-400;
+  }
+
+  .divider {
+    @apply h-px w-full bg-gray-200 dark:bg-gray-800;
+  }
+
+  .skeleton {
+    @apply animate-pulse rounded-md bg-gray-200 dark:bg-gray-800;
   }
 
   .animate-in {
-    animation: slideIn 0.2s ease-out;
+    @apply animate-fade-up;
   }
 }
 
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -3,74 +3,48 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Quick Check — edOS</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 24px; background: #fafafa; color: #1a1b1e; min-height: 100vh; }
-    .header { margin-bottom: 20px; }
-    .header h1 { font-size: 18px; font-weight: 700; color: #4c6ef5; }
-    .header p { font-size: 12px; color: #868e96; margin-top: 4px; }
-    .topic-badge { display: inline-block; background: #e7f5ff; color: #1971c2; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; margin-top: 8px; }
-    .question { background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
-    .question-number { font-size: 11px; font-weight: 600; color: #4c6ef5; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-    .question-text { font-size: 14px; line-height: 1.5; margin-bottom: 12px; }
-    textarea { width: 100%; padding: 10px 14px; border: 1px solid #dee2e6; border-radius: 8px; font-size: 13px; resize: vertical; min-height: 80px; font-family: inherit; }
-    textarea:focus { outline: none; border-color: #4c6ef5; box-shadow: 0 0 0 2px rgba(76,110,245,0.1); }
-    .actions { display: flex; gap: 8px; margin-top: 16px; }
-    button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s; }
-    .btn-primary { background: #4c6ef5; color: white; }
-    .btn-primary:hover { background: #4263eb; }
-    .btn-primary:disabled { background: #adb5bd; cursor: not-allowed; }
-    .btn-skip { background: #f1f3f5; color: #495057; }
-    .btn-skip:hover { background: #e9ecef; }
-    .timer { text-align: center; font-size: 12px; color: #868e96; margin-bottom: 12px; }
-    .result { background: white; border-radius: 12px; padding: 20px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
-    .result .score { font-size: 48px; font-weight: 700; color: #4c6ef5; }
-    .result .feedback { font-size: 13px; color: #495057; margin-top: 12px; line-height: 1.5; }
-    .result .close-btn { margin-top: 16px; background: #4c6ef5; color: white; padding: 10px 24px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; width: auto; flex: none; }
-    #loading { text-align: center; padding: 40px; color: #868e96; }
-    #error { display: none; background: #fff5f5; color: #c92a2a; padding: 10px; border-radius: 8px; font-size: 12px; margin-top: 12px; }
-    .hidden { display: none; }
-  </style>
+  <title>Quick check</title>
+  <link rel="stylesheet" href="quiz-popup.css">
 </head>
 <body>
-  <div id="loading">
-    <p>Loading quiz...</p>
+  <!-- Loading -->
+  <div id="loading" class="state">
+    <div class="spinner" role="status" aria-label="Loading"></div>
   </div>
 
-  <div id="quizSection" class="hidden">
-    <div class="header">
-      <h1>Quick Knowledge Check</h1>
-      <p>You were just studying — let's verify your understanding.</p>
-      <div class="topic-badge" id="topicBadge"></div>
+  <!-- Quiz -->
+  <main id="quizSection" class="hidden">
+    <header class="head">
+      <p class="eyebrow">Quick check</p>
+      <h1 id="topicTitle">Learning session</h1>
+    </header>
+
+    <div class="progress" role="progressbar" aria-label="Time remaining" aria-valuemin="0" aria-valuemax="100">
+      <div class="progress-bar" id="progressBar"></div>
     </div>
+    <p class="timer" id="timer"></p>
 
-    <div class="timer" id="timer"></div>
+    <form id="questions" novalidate></form>
 
-    <div id="questions"></div>
-
-    <div id="error"></div>
+    <p id="error" class="error" role="alert"></p>
 
     <div class="actions">
-      <button class="btn-skip" id="skipBtn">Skip</button>
-      <button class="btn-primary" id="submitBtn" disabled>Submit</button>
+      <button type="button" class="btn btn-ghost" id="skipBtn">Skip</button>
+      <button type="button" class="btn btn-solid" id="submitBtn" disabled>Submit</button>
     </div>
-  </div>
+  </main>
 
-  <div id="resultSection" class="hidden">
+  <!-- Result -->
+  <section id="resultSection" class="hidden">
     <div class="result">
-      <p style="font-size: 12px; color: #868e96; margin-bottom: 8px;">YOUR SCORE</p>
-      <div class="score" id="scoreDisplay">—</div>
-      <div class="feedback" id="feedbackDisplay"></div>
-      <button class="close-btn" id="closeBtn">Done</button>
+      <p class="eyebrow">Your score</p>
+      <p class="score" id="scoreDisplay">—</p>
+      <p class="feedback" id="feedbackDisplay"></p>
+      <button type="button" class="btn btn-solid" id="closeBtn">Done</button>
     </div>
-  </div>
+  </section>
 
-  <script src="quiz-popup.js"></script>
-  <script>
-    document.getElementById('skipBtn').addEventListener('click', skipQuiz);
-    document.getElementById('submitBtn').addEventListener('click', submitQuiz);
-    document.getElementById('closeBtn').addEventListener('click', () => window.close());
-  </script>
+  <!-- No inline scripts: Manifest V3 blocks them under the extension CSP. -->
+  <script type="module" src="quiz-popup.js"></script>
 </body>
 </html>

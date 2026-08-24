@@ -1,5 +1,5 @@
 /**
- * LearningOS Browser Extension - Content Script
+ * edOS Browser Extension - Content Script
  *
  * CORE FEATURE: Captures learning context from web pages.
  * When user spends meaningful time on educational content and navigates away,
@@ -168,35 +168,6 @@ function isLikelyEducational() {
   if (codeBlocks.length >= 2) return true;
 
   // Check for technical headings
-  const h1 = document.querySelector('h1');
-  if (h1) {
-    const techTerms = ['function', 'class', 'algorithm', 'api', 'tutorial', 'guide', 'introduction', 'how to', 'learn'];
-    if (techTerms.some(t => h1.textContent.toLowerCase().includes(t))) return true;
-  }
-
-  return false;
-}
-
-
-function isLikelyEducational() {
-  const url = window.location.href.toLowerCase();
-  const educationalSignals = [
-    'chat.openai.com', 'claude.ai', 'gemini.google.com',
-    'github.com', 'stackoverflow.com', 'developer.mozilla.org',
-    'docs.python.org', 'docs.microsoft.com', 'docs.oracle.com',
-    'medium.com', 'dev.to', 'freecodecamp.org',
-    'geeksforgeeks.org', 'w3schools.com',
-    'coursera.org', 'udemy.com', 'youtube.com',
-    'arxiv.org', 'kaggle.com',
-    '/docs/', '/documentation/', '/api/', '/tutorial/',
-    '/guide/', '/learn/', '/reference/',
-  ];
-
-  if (educationalSignals.some(s => url.includes(s))) return true;
-
-  const codeBlocks = document.querySelectorAll('pre code, .highlight, .code-block');
-  if (codeBlocks.length >= 2) return true;
-
   const h1 = document.querySelector('h1');
   if (h1) {
     const techTerms = ['function', 'class', 'algorithm', 'api', 'tutorial', 'guide', 'introduction', 'how to', 'learn'];

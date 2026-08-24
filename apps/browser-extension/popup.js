@@ -1,133 +1,203 @@
-const API_BASE = 'http://localhost:3001/api';
+/**
+ * edOS extension popup.
+ *
+ * Handles sign-in, the tracking switch, live status, and configuring which
+ * edOS API the extension talks to.
+ */
 
-document.addEventListener('DOMContentLoaded', () => {
-  checkStatus();
+import { getApiBase, setApiBase, DEFAULT_API_BASE } from './config.js';
 
-  document.getElementById('loginBtn').addEventListener('click', login);
-  document.getElementById('logoutBtn').addEventListener('click', logout);
-  document.getElementById('trackingToggle').addEventListener('click', toggleTracking);
-});
+const el = {
+  status: document.getElementById('status'),
+  statusText: document.getElementById('statusText'),
+  loginSection: document.getElementById('loginSection'),
+  loggedInSection: document.getElementById('loggedInSection'),
+  email: document.getElementById('email'),
+  password: document.getElementById('password'),
+  loginBtn: document.getElementById('loginBtn'),
+  loginError: document.getElementById('loginError'),
+  apiBase: document.getElementById('apiBase'),
+  trackingToggle: document.getElementById('trackingToggle'),
+  logoutBtn: document.getElementById('logoutBtn'),
+  userName: document.getElementById('userName'),
+  queueSize: document.getElementById('queueSize'),
+  tabCount: document.getElementById('tabCount'),
+  tabList: document.getElementById('tabList'),
+};
 
-function checkStatus() {
+document.addEventListener('DOMContentLoaded', init);
+if (document.readyState !== 'loading') init();
+
+let started = false;
+
+async function init() {
+  if (started) return;
+  started = true;
+
+  el.apiBase.value = await getApiBase();
+
+  el.loginBtn.addEventListener('click', login);
+  el.logoutBtn.addEventListener('click', logout);
+  el.trackingToggle.addEventListener('click', toggleTracking);
+  el.trackingToggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleTracking();
+    }
+  });
+
+  // Submit on Enter from either field.
+  [el.email, el.password].forEach((field) =>
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') login();
+    }),
+  );
+
+  // Persist the endpoint when the user leaves the field.
+  el.apiBase.addEventListener('change', async () => {
+    const stored = await setApiBase(el.apiBase.value || DEFAULT_API_BASE);
+    el.apiBase.value = stored;
+  });
+
+  refresh();
+}
+
+function refresh() {
   chrome.runtime.sendMessage({ type: 'GET_STATUS' }, (response) => {
     if (chrome.runtime.lastError || !response) {
-      showLoginForm();
+      showSignedOut();
       return;
     }
-    if (response.loggedIn) {
-      showLoggedIn(response);
-    } else {
-      showLoginForm();
-    }
+    if (response.loggedIn) showSignedIn(response);
+    else showSignedOut();
   });
 }
 
-function showLoggedIn(data) {
-  document.getElementById('loginSection').style.display = 'none';
-  document.getElementById('loggedInSection').style.display = 'block';
+function showSignedOut() {
+  el.loginSection.classList.remove('hidden');
+  el.loggedInSection.classList.add('hidden');
+  el.status.className = 'pill';
+  el.statusText.textContent = 'Signed out';
+}
 
-  // Status badge
-  const statusEl = document.getElementById('status');
-  if (data.trackingEnabled) {
-    statusEl.textContent = 'Active';
-    statusEl.className = 'status active';
-  } else {
-    statusEl.textContent = 'Paused';
-    statusEl.className = 'status paused';
-  }
+function showSignedIn(data) {
+  el.loginSection.classList.add('hidden');
+  el.loggedInSection.classList.remove('hidden');
 
-  // Toggle
-  const toggle = document.getElementById('trackingToggle');
-  if (data.trackingEnabled) {
-    toggle.classList.add('on');
-  } else {
-    toggle.classList.remove('on');
-  }
+  const on = Boolean(data.trackingEnabled);
+  el.status.className = `pill ${on ? 'on' : 'paused'}`;
+  el.statusText.textContent = on ? 'Tracking' : 'Paused';
+  el.trackingToggle.classList.toggle('on', on);
+  el.trackingToggle.setAttribute('aria-checked', String(on));
 
-  // Stats
-  document.getElementById('userName').textContent = data.user?.name || '—';
-  document.getElementById('queueSize').textContent = data.queueSize || '0';
+  el.userName.textContent = data.user?.name || data.user?.email || '—';
+  el.queueSize.textContent = String(data.queueSize ?? 0);
 
-  // Tracked tabs
   const tabs = data.trackedTabs || [];
-  document.getElementById('tabCount').textContent = tabs.length;
+  el.tabCount.textContent = tabs.length > 0 ? `(${tabs.length})` : '';
   renderTabs(tabs);
 }
 
 function renderTabs(tabs) {
-  const list = document.getElementById('tabList');
-  if (!tabs || tabs.length === 0) {
-    list.innerHTML = '<div class="empty">No tabs being tracked</div>';
+  el.tabList.replaceChildren();
+
+  if (!tabs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'Nothing being tracked';
+    el.tabList.append(empty);
     return;
   }
 
-  list.innerHTML = tabs.map(tab => {
-    const elapsed = Math.round((Date.now() - tab.startTime) / 1000);
-    const minutes = Math.floor(elapsed / 60);
-    const seconds = elapsed % 60;
-    const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
-    const isActive = (Date.now() - tab.lastActive) < 30000;
+  tabs.forEach((tab) => {
+    const row = document.createElement('div');
+    row.className = 'tab';
 
-    return `
-      <div class="tab-item">
-        <span class="dot ${isActive ? '' : 'idle'}"></span>
-        <span class="title" title="${escapeHtml(tab.title)}">${escapeHtml(tab.title || tab.url || 'Unknown')}</span>
-        <span class="time">${timeStr}</span>
-      </div>
-    `;
-  }).join('');
-}
+    const dot = document.createElement('span');
+    const idle = Date.now() - tab.lastActive >= 30000;
+    dot.className = `dot${idle ? ' idle' : ''}`;
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str || '';
-  return div.innerHTML;
-}
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = tab.title || tab.url || 'Untitled';
+    title.title = tab.title || tab.url || '';
 
-function showLoginForm() {
-  document.getElementById('loginSection').style.display = 'block';
-  document.getElementById('loggedInSection').style.display = 'none';
-  document.getElementById('status').textContent = 'Off';
-  document.getElementById('status').className = 'status inactive';
-}
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = formatDuration(tab.timeSpent ?? 0);
 
-function toggleTracking() {
-  chrome.runtime.sendMessage({ type: 'TOGGLE_TRACKING' }, () => {
-    checkStatus();
+    row.append(dot, title, time);
+    el.tabList.append(row);
   });
 }
 
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(seconds));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+function toggleTracking() {
+  chrome.runtime.sendMessage({ type: 'TOGGLE_TRACKING' }, () => refresh());
+}
+
 async function login() {
-  const email = document.getElementById('email').value;
-  const password = document.getElementById('password').value;
-  const errorEl = document.getElementById('loginError');
-  errorEl.textContent = '';
+  const email = el.email.value.trim();
+  const password = el.password.value;
+
+  el.loginError.classList.remove('visible');
+
+  if (!email || !password) {
+    showLoginError('Enter your email and password.');
+    return;
+  }
+
+  el.loginBtn.disabled = true;
+  el.loginBtn.textContent = 'Signing in';
 
   try {
-    const res = await fetch(`${API_BASE}/auth/login`, {
+    // Honour any endpoint typed in but not yet blurred.
+    const apiBase = await setApiBase(el.apiBase.value || DEFAULT_API_BASE);
+
+    const res = await fetch(`${apiBase}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      errorEl.textContent = err.message || 'Login failed';
+      const err = await res.json().catch(() => ({}));
+      showLoginError(err.message || `Sign in failed (HTTP ${res.status})`);
       return;
     }
 
     const data = await res.json();
-    chrome.runtime.sendMessage({
-      type: 'LOGIN',
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken,
-      user: data.user,
-    }, () => checkStatus());
-  } catch (e) {
-    errorEl.textContent = 'Connection failed. Is the API running?';
+    chrome.runtime.sendMessage(
+      {
+        type: 'LOGIN',
+        accessToken: data.accessToken,
+        refreshToken: data.refreshToken,
+        user: data.user,
+      },
+      () => {
+        el.password.value = '';
+        refresh();
+      },
+    );
+  } catch {
+    showLoginError('Could not reach the API. Is the server running?');
+  } finally {
+    el.loginBtn.disabled = false;
+    el.loginBtn.textContent = 'Sign in';
   }
 }
 
+function showLoginError(message) {
+  el.loginError.textContent = message;
+  el.loginError.classList.add('visible');
+}
+
 function logout() {
-  chrome.runtime.sendMessage({ type: 'LOGOUT' }, () => checkStatus());
+  chrome.runtime.sendMessage({ type: 'LOGOUT' }, () => refresh());
 }

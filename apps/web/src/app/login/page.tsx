@@ -24,34 +24,39 @@ export default function LoginPage() {
       localStorage.setItem('user', JSON.stringify(result.user));
       router.push('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Login failed');
+      setError(err.message || 'Could not sign in');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold">Sign in to edOS</h1>
-          <p className="text-sm text-gray-500">Continue your learning journey</p>
-        </div>
+    <main className="flex min-h-screen items-center justify-center px-6 py-12">
+      <div className="w-full max-w-[340px] animate-in">
+        <Link href="/" className="eyebrow hover:text-gray-900 dark:hover:text-gray-100">
+          edOS
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold text-gray-900 dark:text-gray-50">Sign in</h1>
+        <p className="mt-1 text-sm muted">Pick up where you left off.</p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="mt-8 space-y-4" noValidate>
           {error && (
-            <div className="rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
+            <p
+              role="alert"
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2.5 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-400"
+            >
               {error}
-            </div>
+            </p>
           )}
 
-          <div className="space-y-2">
-            <label htmlFor="email" className="text-sm font-medium">
+          <div>
+            <label htmlFor="email" className="label">
               Email
             </label>
             <input
               id="email"
               type="email"
+              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="input"
@@ -60,13 +65,14 @@ export default function LoginPage() {
             />
           </div>
 
-          <div className="space-y-2">
-            <label htmlFor="password" className="text-sm font-medium">
+          <div>
+            <label htmlFor="password" className="label">
               Password
             </label>
             <input
               id="password"
               type="password"
+              autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="input"
@@ -76,13 +82,16 @@ export default function LoginPage() {
           </div>
 
           <button type="submit" className="btn-primary w-full" disabled={loading}>
-            {loading ? 'Signing in...' : 'Sign In'}
+            {loading ? 'Signing in' : 'Sign in'}
           </button>
         </form>
 
-        <p className="text-center text-sm text-gray-500">
-          Don&apos;t have an account?{' '}
-          <Link href="/register" className="text-primary-600 hover:text-primary-700 font-medium">
+        <p className="mt-6 text-xs muted">
+          No account?{' '}
+          <Link
+            href="/register"
+            className="font-medium text-gray-900 underline decoration-gray-300 underline-offset-2 hover:decoration-gray-500 dark:text-gray-100 dark:decoration-gray-600"
+          >
             Create one
           </Link>
         </p>

@@ -4,104 +4,290 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>edOS</title>
+  <link rel="stylesheet" href="quiz-popup.css">
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; width: 360px; padding: 16px; background: #fff; color: #1a1b1e; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-    .header h1 { font-size: 16px; font-weight: 700; }
-    .status { font-size: 11px; padding: 2px 8px; border-radius: 12px; }
-    .status.active { background: #d3f9d8; color: #2b8a3e; }
-    .status.inactive { background: #ffe3e3; color: #c92a2a; }
-    .status.paused { background: #fff3bf; color: #e67700; }
-    .section { margin-bottom: 16px; }
-    .section-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #868e96; margin-bottom: 8px; font-weight: 600; }
-    .card { background: #f8f9fa; border-radius: 8px; padding: 12px; margin-bottom: 8px; }
-    .stat { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
-    .stat:last-child { margin-bottom: 0; }
-    .stat-value { font-weight: 600; }
-    .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; }
-    .toggle-label { font-size: 13px; }
-    .toggle { width: 36px; height: 20px; border-radius: 10px; background: #dee2e6; position: relative; cursor: pointer; transition: background 0.2s; }
-    .toggle.on { background: #4c6ef5; }
-    .toggle .knob { width: 16px; height: 16px; border-radius: 50%; background: white; position: absolute; top: 2px; left: 2px; transition: transform 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
-    .toggle.on .knob { transform: translateX(16px); }
-    .tab-list { max-height: 150px; overflow-y: auto; }
-    .tab-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #f1f3f5; font-size: 12px; }
-    .tab-item:last-child { border-bottom: none; }
-    .tab-item .dot { width: 6px; height: 6px; border-radius: 50%; background: #51cf66; flex-shrink: 0; }
-    .tab-item .dot.idle { background: #adb5bd; }
-    .tab-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tab-item .time { color: #868e96; font-size: 11px; flex-shrink: 0; }
-    input { width: 100%; padding: 8px 12px; border: 1px solid #dee2e6; border-radius: 6px; font-size: 13px; margin-bottom: 8px; }
-    button { width: 100%; padding: 8px 12px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; }
-    .btn-primary { background: #4c6ef5; color: #fff; }
-    .btn-primary:hover { background: #4263eb; }
-    .btn-secondary { background: #f1f3f5; color: #495057; margin-top: 6px; }
-    .btn-secondary:hover { background: #e9ecef; }
-    .empty { text-align: center; padding: 12px; color: #adb5bd; font-size: 12px; }
-    #loginSection, #loggedInSection { display: none; }
+    /* Popup-specific layout on top of the shared minimal theme. */
+    body {
+      width: 340px;
+      padding: 18px;
+      min-height: 0;
+    }
+
+    .bar {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+
+    .brand {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .pill .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+
+    .pill.on .dot { background: #16a34a; }
+    .pill.paused .dot { background: #d97706; }
+
+    .panel {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+
+    .row + .row {
+      border-top: 1px solid var(--border);
+    }
+
+    .row-label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .row-value {
+      font-size: 13px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .section-label {
+      font-size: 11px;
+      color: var(--muted);
+      margin: 18px 0 7px;
+    }
+
+    /* Switch */
+    .switch {
+      width: 34px;
+      height: 20px;
+      flex: none;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      position: relative;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .switch .knob {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: transform 0.15s ease, background 0.15s ease;
+    }
+
+    .switch.on {
+      background: var(--text);
+      border-color: var(--text);
+    }
+
+    .switch.on .knob {
+      transform: translateX(14px);
+      background: var(--surface);
+    }
+
+    .switch:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Tab list */
+    .tabs {
+      max-height: 148px;
+      overflow-y: auto;
+    }
+
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+    }
+
+    .tab + .tab {
+      border-top: 1px solid var(--border);
+    }
+
+    .tab .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #16a34a;
+      flex: none;
+    }
+
+    .tab .dot.idle { background: var(--border); }
+
+    .tab .title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab .time {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      flex: none;
+    }
+
+    .empty {
+      padding: 16px 12px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* Form */
+    label.field {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    label.field span {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    input[type="email"],
+    input[type="password"],
+    input[type="text"] {
+      width: 100%;
+      padding: 9px 11px;
+      font-family: inherit;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: border-color 0.12s ease, box-shadow 0.12s ease;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .stack > .btn { width: 100%; flex: none; }
+    .stack > .btn + .btn { margin-top: 7px; }
+
+    .hint {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 8px;
+      line-height: 1.5;
+    }
+
+    details.advanced {
+      margin-top: 14px;
+    }
+
+    details.advanced summary {
+      font-size: 11px;
+      color: var(--muted);
+      cursor: pointer;
+      list-style: none;
+    }
+
+    details.advanced summary::-webkit-details-marker { display: none; }
+    details.advanced summary::before { content: '+ '; }
+    details.advanced[open] summary::before { content: '– '; }
+    details.advanced > div { margin-top: 8px; }
   </style>
 </head>
 <body>
-  <div class="header">
-    <h1>edOS</h1>
-    <span class="status inactive" id="status">Off</span>
+  <div class="bar">
+    <span class="brand">edOS</span>
+    <span class="pill" id="status"><span class="dot"></span><span id="statusText">Signed out</span></span>
   </div>
 
-  <!-- Login Form -->
-  <div id="loginSection">
-    <div class="section">
-      <div class="section-title">Sign In</div>
-      <input type="email" id="email" placeholder="Email" />
-      <input type="password" id="password" placeholder="Password" />
-      <button class="btn-primary" id="loginBtn">Sign In</button>
-      <div id="loginError" style="color: #c92a2a; font-size: 11px; margin-top: 6px;"></div>
+  <!-- Signed out -->
+  <section id="loginSection" class="hidden">
+    <div class="stack">
+      <label class="field">
+        <span>Email</span>
+        <input type="email" id="email" autocomplete="username" placeholder="you@example.com">
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input type="password" id="password" autocomplete="current-password" placeholder="••••••••">
+      </label>
+      <button type="button" class="btn btn-solid" id="loginBtn">Sign in</button>
     </div>
-  </div>
 
-  <!-- Logged In View -->
-  <div id="loggedInSection">
-    <!-- On/Off Toggle -->
-    <div class="section">
-      <div class="card">
-        <div class="toggle-row">
-          <span class="toggle-label">Tracking Active</span>
-          <div class="toggle" id="trackingToggle"><div class="knob"></div></div>
+    <p id="loginError" class="error" role="alert"></p>
+
+    <details class="advanced">
+      <summary>API endpoint</summary>
+      <div>
+        <input type="text" id="apiBase" placeholder="http://localhost:3001/api">
+        <p class="hint">Point the extension at a different edOS API. Leave as-is for a local server.</p>
+      </div>
+    </details>
+  </section>
+
+  <!-- Signed in -->
+  <section id="loggedInSection" class="hidden">
+    <div class="panel">
+      <div class="row">
+        <span class="row-label">Tracking</span>
+        <div class="switch" id="trackingToggle" role="switch" tabindex="0" aria-label="Toggle tracking">
+          <div class="knob"></div>
         </div>
+      </div>
+      <div class="row">
+        <span class="row-label">Account</span>
+        <span class="row-value" id="userName">—</span>
+      </div>
+      <div class="row">
+        <span class="row-label">Queued events</span>
+        <span class="row-value" id="queueSize">0</span>
       </div>
     </div>
 
-    <!-- Stats -->
-    <div class="section">
-      <div class="card">
-        <div class="stat">
-          <span>User</span>
-          <span class="stat-value" id="userName">—</span>
-        </div>
-        <div class="stat">
-          <span>Events queued</span>
-          <span class="stat-value" id="queueSize">0</span>
-        </div>
-        <div class="stat">
-          <span>Tabs tracked</span>
-          <span class="stat-value" id="tabCount">0</span>
-        </div>
+    <p class="section-label">Tracked tabs <span id="tabCount"></span></p>
+    <div class="panel">
+      <div class="tabs" id="tabList">
+        <div class="empty">Nothing being tracked</div>
       </div>
     </div>
 
-    <!-- Tracked Tabs -->
-    <div class="section">
-      <div class="section-title">Currently Tracked Tabs</div>
-      <div class="card">
-        <div class="tab-list" id="tabList">
-          <div class="empty">No tabs being tracked</div>
-        </div>
-      </div>
+    <div class="stack" style="margin-top:16px">
+      <button type="button" class="btn btn-ghost" id="logoutBtn">Sign out</button>
     </div>
+  </section>
 
-    <button class="btn-secondary" id="logoutBtn">Sign Out</button>
-  </div>
-
-  <script src="popup.js"></script>
+  <script type="module" src="popup.js"></script>
 </body>
 </html>

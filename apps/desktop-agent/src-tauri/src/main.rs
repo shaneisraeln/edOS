@@ -11,7 +11,6 @@ use auth::AppState;
 use events::EventQueue;
 use monitor::MonitorState;
 use session::SessionManager;
-use std::thread;
 use tauri::{Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, CustomMenuItem};
 
 lazy_static::lazy_static! {

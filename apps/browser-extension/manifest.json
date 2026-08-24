@@ -10,6 +10,8 @@
     "alarms"
   ],
   "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
     "https://chat.openai.com/*",
     "https://claude.ai/*",
     "https://gemini.google.com/*",
@@ -21,8 +23,12 @@
     "https://docs.python.org/*",
     "https://docs.microsoft.com/*"
   ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup.html",
@@ -41,7 +47,12 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["quiz-popup.html", "quiz-popup.js"],
+      "resources": [
+        "quiz-popup.html",
+        "quiz-popup.js",
+        "quiz-popup.css",
+        "config.js"
+      ],
       "matches": ["<all_urls>"]
     }
   ],

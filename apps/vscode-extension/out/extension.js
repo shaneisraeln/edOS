@@ -36,7 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
-const API_BASE = () => vscode.workspace.getConfiguration('learningos').get('apiUrl') || 'http://localhost:3001/api';
+const API_BASE = () => vscode.workspace.getConfiguration('edos').get('apiUrl') || 'http://localhost:3001/api';
 let accessToken;
 let sessionId;
 let eventQueue = [];
@@ -56,19 +56,25 @@ const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 // Min coding time to trigger quiz
 const MIN_QUIZ_TIME_S = 60;
 function activate(context) {
-    // Restore state
+    // Restore state. The `edos.enabled` setting provides the default; a manual
+    // toggle stored in globalState takes precedence over it.
     accessToken = context.globalState.get('accessToken');
-    trackingEnabled = context.globalState.get('trackingEnabled') ?? true;
+    const configuredDefault = vscode.workspace
+        .getConfiguration('edos')
+        .get('enabled', true);
+    trackingEnabled = context.globalState.get('trackingEnabled') ?? configuredDefault;
     // Status bar
     statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-    statusBarItem.command = 'learningos.toggleTracking';
+    statusBarItem.command = 'edos.toggleTracking';
     updateStatusBar();
     statusBarItem.show();
     context.subscriptions.push(statusBarItem);
     // Commands
-    context.subscriptions.push(vscode.commands.registerCommand('learningos.login', () => login(context)), vscode.commands.registerCommand('learningos.logout', () => logout(context)), vscode.commands.registerCommand('learningos.startSession', () => startSession()), vscode.commands.registerCommand('learningos.endSession', () => endSession()), vscode.commands.registerCommand('learningos.toggleTracking', () => toggleTracking(context)), vscode.commands.registerCommand('learningos.showStats', () => showStats()));
-    if (!trackingEnabled)
-        return;
+    context.subscriptions.push(vscode.commands.registerCommand('edos.login', () => login(context)), vscode.commands.registerCommand('edos.logout', () => logout(context)), vscode.commands.registerCommand('edos.startSession', () => startSession()), vscode.commands.registerCommand('edos.endSession', () => endSession()), vscode.commands.registerCommand('edos.toggleTracking', () => toggleTracking(context)), vscode.commands.registerCommand('edos.showStats', () => showStats()));
+    // Listeners are registered unconditionally and each one checks
+    // `trackingEnabled` at call time. Returning early here would mean a user who
+    // paused tracking could never resume it without reloading the window,
+    // because the listeners would never have been attached.
     // Track file opens
     context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
         if (!trackingEnabled || !editor)
@@ -124,6 +130,11 @@ function resetIdleTimer() {
     if (idleTimeout)
         clearTimeout(idleTimeout);
     idleTimeout = setTimeout(() => {
+        const quizOnIdle = vscode.workspace
+            .getConfiguration('edos')
+            .get('quizOnIdle', true);
+        if (!quizOnIdle)
+            return;
         // User has been idle for 5 minutes — trigger quiz if enough coding time
         const codingTime = codingStartTime ? Math.round((Date.now() - codingStartTime) / 1000) : 0;
         if (codingTime >= MIN_QUIZ_TIME_S && accessToken) {
@@ -171,66 +182,137 @@ async function triggerQuiz() {
     buildCount = 0;
 }
 function showQuizPanel(quiz) {
-    const panel = vscode.window.createWebviewPanel('learningosQuiz', `Quick Check: ${quiz.topic}`, vscode.ViewColumn.Beside, { enableScripts: true });
+    const panel = vscode.window.createWebviewPanel('edosQuiz', `Quick Check: ${quiz.topic}`, vscode.ViewColumn.Beside, { enableScripts: true });
+    const total = quiz.questions.length;
     const questionsHtml = quiz.questions.map((q, i) => `
     <div class="question">
-      <p class="qnum">Question ${i + 1}</p>
+      <p class="qnum">${i + 1} of ${total}</p>
       <p class="qtext">${escapeHtml(q.text)}</p>
-      <textarea id="a-${q.id}" placeholder="Your answer..."></textarea>
+      <textarea id="a-${escapeHtml(q.id)}" placeholder="Your answer" aria-label="Answer to question ${i + 1}"></textarea>
     </div>
   `).join('');
     const qIds = JSON.stringify(quiz.questions.map((q) => q.id));
     panel.webview.html = `<!DOCTYPE html>
-<html><head><style>
-body { font-family: var(--vscode-font-family); padding: 16px; color: var(--vscode-foreground); }
-h2 { font-size: 16px; margin-bottom: 4px; }
-.topic { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 16px; }
-.question { margin-bottom: 14px; }
-.qnum { font-size: 10px; font-weight: 600; text-transform: uppercase; opacity: 0.6; margin-bottom: 4px; }
-.qtext { font-size: 13px; margin-bottom: 8px; line-height: 1.4; }
-textarea { width: 100%; min-height: 60px; padding: 8px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); border-radius: 4px; font-family: inherit; font-size: 12px; resize: vertical; }
-.actions { display: flex; gap: 8px; margin-top: 16px; }
-button { padding: 8px 16px; border: none; border-radius: 4px; font-size: 12px; cursor: pointer; }
-.btn-p { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
-.btn-s { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
-#result { display: none; text-align: center; padding: 20px; }
-#result .score { font-size: 36px; font-weight: bold; }
-#status { font-size: 11px; margin-top: 8px; opacity: 0.7; }
+<html lang="en"><head><meta charset="UTF-8"><style>
+/* Inherits VS Code theme tokens so it matches whatever theme the user runs. */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 22px 20px;
+  color: var(--vscode-foreground);
+  max-width: 560px;
+}
+.eyebrow { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
+h1 { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 18px; }
+.question {
+  border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.25));
+  border-radius: 10px;
+  padding: 14px;
+}
+.question + .question { margin-top: 14px; }
+.qnum { font-size: 11px; opacity: 0.6; font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+.qtext { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+textarea {
+  width: 100%; min-height: 74px; padding: 9px 11px;
+  font-family: inherit; font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--vscode-input-border, rgba(128,128,128,0.25));
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  border-radius: 8px; resize: vertical;
+}
+textarea:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.actions { display: flex; gap: 8px; margin-top: 18px; }
+button {
+  flex: 1; padding: 9px 14px; font-family: inherit; font-size: 13px; font-weight: 500;
+  border: 1px solid transparent; border-radius: 8px; cursor: pointer;
+}
+button:focus-visible { outline: 1px solid var(--vscode-focusBorder); }
+.btn-solid { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.btn-solid:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+.btn-solid:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-ghost {
+  background: transparent; opacity: 0.85;
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border, rgba(128,128,128,0.25));
+}
+.btn-ghost:hover { opacity: 1; }
+#status { display: none; margin-top: 12px; font-size: 12px; color: var(--vscode-errorForeground); }
+#status.visible { display: block; }
+#result { display: none; text-align: center; padding: 44px 8px; }
+#result .score {
+  font-size: 44px; font-weight: 600; letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums; line-height: 1.1; margin: 6px 0 10px;
+}
+#result .fb { font-size: 13px; opacity: 0.7; line-height: 1.55; max-width: 34ch; margin: 0 auto; }
 </style></head><body>
-<div id="quizView">
-<h2>Quick Knowledge Check</h2>
-<p class="topic">${escapeHtml(quiz.topic)}</p>
-${questionsHtml}
-<div class="actions">
-<button class="btn-s" onclick="skip()">Skip</button>
-<button class="btn-p" onclick="submit()">Submit</button>
-</div>
-<p id="status"></p>
-</div>
-<div id="result">
-<p class="score" id="scoreVal">—</p>
-<p id="fbVal"></p>
-</div>
+<main id="quizView">
+  <p class="eyebrow">Quick check</p>
+  <h1>${escapeHtml(quiz.topic)}</h1>
+  ${questionsHtml}
+  <div class="actions">
+    <button type="button" class="btn-ghost" id="skipBtn">Skip</button>
+    <button type="button" class="btn-solid" id="submitBtn" disabled>Submit</button>
+  </div>
+  <p id="status" role="alert"></p>
+</main>
+<section id="result">
+  <p class="eyebrow">Your score</p>
+  <p class="score" id="scoreVal">—</p>
+  <p class="fb" id="fbVal"></p>
+</section>
 <script>
 const vscode = acquireVsCodeApi();
 const QS = ${qIds};
-const QUIZ_ID = "${quiz.id}";
+const QUIZ_ID = ${JSON.stringify(quiz.id)};
 
-function submit() {
-  document.getElementById('status').textContent = 'Scoring...';
-  const answers = QS.map(id => ({ questionId: id, answer: (document.getElementById('a-'+id)||{}).value||'' }));
+const submitBtn = document.getElementById('submitBtn');
+const statusEl = document.getElementById('status');
+
+function fieldFor(id) { return document.getElementById('a-' + id); }
+
+function refreshSubmitState() {
+  const answered = QS.some(id => {
+    const f = fieldFor(id);
+    return f && f.value.trim().length > 0;
+  });
+  submitBtn.disabled = !answered;
+}
+
+QS.forEach(id => {
+  const f = fieldFor(id);
+  if (f) f.addEventListener('input', refreshSubmitState);
+});
+
+submitBtn.addEventListener('click', () => {
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Scoring';
+  statusEl.classList.remove('visible');
+  const answers = QS.map(id => {
+    const f = fieldFor(id);
+    return { questionId: id, answer: f ? f.value.trim() : '' };
+  });
   vscode.postMessage({ type: 'submit', quizId: QUIZ_ID, answers });
-}
-function skip() {
+});
+
+document.getElementById('skipBtn').addEventListener('click', () => {
   vscode.postMessage({ type: 'skip', quizId: QUIZ_ID });
-}
+});
+
 window.addEventListener('message', e => {
   const msg = e.data;
   if (msg.type === 'result') {
     document.getElementById('quizView').style.display = 'none';
     document.getElementById('result').style.display = 'block';
-    document.getElementById('scoreVal').textContent = msg.percentage + '%';
-    document.getElementById('fbVal').textContent = msg.feedback || 'Done!';
+    document.getElementById('scoreVal').textContent = Math.round(msg.percentage || 0) + '%';
+    document.getElementById('fbVal').textContent = msg.feedback || 'Answers recorded.';
+  }
+  if (msg.type === 'error') {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Submit';
+    statusEl.textContent = msg.message || 'Could not submit.';
+    statusEl.classList.add('visible');
   }
 });
 </script></body></html>`;
@@ -243,11 +325,22 @@ window.addEventListener('message', e => {
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
                     body: JSON.stringify({ quizId: msg.quizId, answers: msg.answers }),
                 });
+                if (!res.ok)
+                    throw new Error(`HTTP ${res.status}`);
                 const result = await res.json();
-                panel.webview.postMessage({ type: 'result', percentage: result.percentage || 0, feedback: result.feedback || '' });
+                panel.webview.postMessage({
+                    type: 'result',
+                    percentage: result.percentage || 0,
+                    feedback: result.feedback || '',
+                });
             }
-            catch {
-                panel.webview.postMessage({ type: 'result', percentage: 0, feedback: 'Error scoring.' });
+            catch (err) {
+                // Report the failure so the user can retry, rather than showing a
+                // misleading 0% score as if they had been graded.
+                panel.webview.postMessage({
+                    type: 'error',
+                    message: `Could not submit: ${err?.message || 'unknown error'}`,
+                });
             }
         }
         if (msg.type === 'skip') {
@@ -342,17 +435,17 @@ function detectTopic(metadata) {
 // --- Status Bar ---
 function updateStatusBar() {
     if (!accessToken) {
-        statusBarItem.text = '$(circle-slash) LearningOS: Sign in';
+        statusBarItem.text = '$(circle-slash) edOS: Sign in';
         statusBarItem.tooltip = 'Click to sign in';
         return;
     }
     if (!trackingEnabled) {
-        statusBarItem.text = '$(debug-pause) LearningOS: Paused';
+        statusBarItem.text = '$(debug-pause) edOS: Paused';
         statusBarItem.tooltip = 'Click to resume tracking';
         return;
     }
     const queueSize = eventQueue.length;
-    statusBarItem.text = `$(eye) LearningOS: ${queueSize} events`;
+    statusBarItem.text = `$(eye) edOS: ${queueSize} events`;
     statusBarItem.tooltip = `Tracking active · ${filesEdited.size} files edited · Click to pause`;
 }
 // --- Session Management ---
@@ -396,11 +489,15 @@ async function syncEvents() {
     const events = [...eventQueue];
     eventQueue = [];
     try {
-        await fetch(`${API_BASE()}/ingest/events`, {
+        const res = await fetch(`${API_BASE()}/ingest/events`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
             body: JSON.stringify({ events }),
         });
+        // A non-2xx response (expired token, API restarting) must not silently
+        // discard the batch — requeue it so the next sync retries.
+        if (!res.ok)
+            throw new Error(`HTTP ${res.status}`);
     }
     catch {
         eventQueue.unshift(...events);
@@ -412,14 +509,14 @@ function toggleTracking(context) {
     trackingEnabled = !trackingEnabled;
     context.globalState.update('trackingEnabled', trackingEnabled);
     updateStatusBar();
-    vscode.window.showInformationMessage(`LearningOS: Tracking ${trackingEnabled ? 'resumed' : 'paused'}`);
+    vscode.window.showInformationMessage(`edOS: Tracking ${trackingEnabled ? 'resumed' : 'paused'}`);
 }
 function showStats() {
     const codingTime = codingStartTime ? Math.round((Date.now() - codingStartTime) / 1000 / 60) : 0;
-    vscode.window.showInformationMessage(`LearningOS Stats: ${codingTime}m coding · ${filesEdited.size} files · ${buildCount} builds · ${errorsFixed} errors fixed · ${eventQueue.length} queued events`);
+    vscode.window.showInformationMessage(`edOS Stats: ${codingTime}m coding · ${filesEdited.size} files · ${buildCount} builds · ${errorsFixed} errors fixed · ${eventQueue.length} queued events`);
 }
 async function login(context) {
-    const email = await vscode.window.showInputBox({ prompt: 'LearningOS Email', placeHolder: 'your@email.com' });
+    const email = await vscode.window.showInputBox({ prompt: 'edOS Email', placeHolder: 'your@email.com' });
     if (!email)
         return;
     const password = await vscode.window.showInputBox({ prompt: 'Password', password: true });
@@ -432,25 +529,25 @@ async function login(context) {
             body: JSON.stringify({ email, password }),
         });
         if (!res.ok) {
-            vscode.window.showErrorMessage('LearningOS: Login failed. Check your credentials.');
+            vscode.window.showErrorMessage('edOS: Login failed. Check your credentials.');
             return;
         }
         const data = await res.json();
         accessToken = data.accessToken;
         await context.globalState.update('accessToken', accessToken);
-        vscode.window.showInformationMessage(`LearningOS: Welcome, ${data.user.name}!`);
+        vscode.window.showInformationMessage(`edOS: Welcome, ${data.user.name}!`);
         updateStatusBar();
         startSession();
     }
     catch {
-        vscode.window.showErrorMessage('LearningOS: Cannot connect to API.');
+        vscode.window.showErrorMessage('edOS: Cannot connect to API.');
     }
 }
 async function logout(context) {
     accessToken = undefined;
     await context.globalState.update('accessToken', undefined);
     updateStatusBar();
-    vscode.window.showInformationMessage('LearningOS: Signed out.');
+    vscode.window.showInformationMessage('edOS: Signed out.');
 }
 function escapeHtml(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
