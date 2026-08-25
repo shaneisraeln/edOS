@@ -5,6 +5,11 @@ import { AssessmentEntity } from '../../entities/assessment.entity';
 import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { AIService } from '../ai/ai.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { AnswerGraderService, stripAnswerKey } from '../scoring/answer-grader.service';
+import { MasteryService } from '../scoring/mastery.service';
+import { ConceptResolverService } from '../scoring/concept-resolver.service';
+import { PASS_RATIO } from '../scoring/scoring.constants';
+import { StoredQuestion } from '../scoring/scoring.types';
 
 /**
  * Quick contextual challenges triggered during learning sessions.
@@ -19,6 +24,9 @@ export class ChallengesService {
     private readonly nodeRepo: Repository<KnowledgeNodeEntity>,
     private readonly aiService: AIService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly grader: AnswerGraderService,
+    private readonly mastery: MasteryService,
+    private readonly concepts: ConceptResolverService,
   ) {}
 
   async generateChallenge(userId: string, topic?: string) {
@@ -80,35 +88,60 @@ Return ONLY valid JSON:
     const assessment = await this.assessmentRepo.findOne({ where: { id: challengeId, userId } });
     if (!assessment) return { error: 'Challenge not found' };
 
-    const question = assessment.questions[0] as any;
+    const questions = (assessment.questions || []) as StoredQuestion[];
 
-    const result = await this.aiService.getProvider().complete({
-      systemPrompt: `Score this challenge answer briefly. Return JSON: { "score": 0-20, "correct": true/false, "feedback": "1 sentence" }`,
-      messages: [{ role: 'user', content: `Q: ${question.text}\nA: ${answer}\nExpected key points: ${(question.expectedKeyPoints || []).join(', ')}` }],
-      temperature: 0.3,
-      responseFormat: 'json',
+    // Uses the shared grader instead of its own throwaway rubric. The old
+    // version defaulted to { score: 10, correct: true } when the response could
+    // not be parsed, i.e. it awarded half marks and called a wrong answer right.
+    const result = await this.grader.grade({
+      questions,
+      answers: [{ questionId: questions[0]?.id ?? 'ch1', answer }],
+      topic: assessment.topic,
     });
 
-    let scoring: any;
-    try {
-      scoring = JSON.parse(result.content);
-    } catch {
-      scoring = { score: 10, correct: true, feedback: 'Evaluated.' };
-    }
-
-    assessment.score = scoring.score;
+    assessment.score = result.totalScore;
+    assessment.maxScore = result.gradableMaxScore || result.declaredMaxScore;
     assessment.status = 'completed';
     assessment.completedAt = new Date();
-    assessment.feedback = scoring.feedback;
+    assessment.feedback = result.feedback;
     await this.assessmentRepo.save(assessment);
 
-    return { score: scoring.score, correct: scoring.correct, feedback: scoring.feedback, maxScore: 20 };
+    // Challenges never fed the knowledge graph at all, so the daily challenge
+    // could not affect the weakness ranking that chose the next one.
+    if (result.percentage !== null) {
+      const concept = await this.concepts.resolve(assessment.topic);
+      if (concept) {
+        await this.mastery.recordEvidence({
+          userId,
+          conceptId: concept.id,
+          kind: 'challenge',
+          scoreFraction: result.percentage / 100,
+          difficulty: assessment.difficulty,
+          isReview: true,
+        });
+      }
+    }
+
+    return {
+      score: result.totalScore,
+      maxScore: assessment.maxScore,
+      percentage: result.percentage === null ? null : Math.round(result.percentage),
+      correct: result.percentage === null ? null : result.percentage >= PASS_RATIO * 100,
+      feedback: result.feedback,
+      degraded: result.degraded,
+    };
   }
 
   async getPendingChallenge(userId: string) {
-    return this.assessmentRepo.findOne({
+    const challenge = await this.assessmentRepo.findOne({
       where: { userId, type: 'challenge', status: 'pending' },
       order: { generatedAt: 'DESC' },
     });
+    if (!challenge) return null;
+
+    return {
+      ...challenge,
+      questions: stripAnswerKey((challenge.questions || []) as Record<string, unknown>[]),
+    };
   }
 }

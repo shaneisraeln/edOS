@@ -24,6 +24,8 @@ import { LearningPathModule } from './modules/learning-path/learning-path.module
 import { MentorModule } from './modules/mentor/mentor.module';
 import { GroupsModule } from './modules/groups/groups.module';
 import { RecruiterModule } from './modules/recruiter/recruiter.module';
+import { ScoringModule } from './modules/scoring/scoring.module';
+import { SessionModule } from './modules/session/session.module';
 
 @Module({
   imports: [
@@ -62,6 +64,8 @@ import { RecruiterModule } from './modules/recruiter/recruiter.module';
     NotificationsModule,
     SettingsModule,
     RealtimeModule,
+    ScoringModule,
+    SessionModule,
     ChallengesModule,
     ContextQuizModule,
     LearningPathModule,

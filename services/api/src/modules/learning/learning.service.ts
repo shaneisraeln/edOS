@@ -3,7 +3,18 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { LearningSessionEntity } from '../../entities/learning-session.entity';
 import { LearningEventEntity } from '../../entities/learning-event.entity';
-import { AIService } from '../ai/ai.service';
+import { SessionService } from '../session/session.service';
+import { SessionCheckService } from '../session/session-check.service';
+import { Surface } from '../session/session.constants';
+
+/**
+ * Which surface a session belongs to. Interval-quiz events used to hardcode
+ * 'web', which misattributed checks once other surfaces could trigger them.
+ */
+function sourceOf(session: LearningSessionEntity): string {
+  const surface = (session as unknown as { initiatedBy?: string }).initiatedBy;
+  return surface || 'web';
+}
 
 @Injectable()
 export class LearningService {
@@ -12,34 +23,36 @@ export class LearningService {
     private readonly sessionRepo: Repository<LearningSessionEntity>,
     @InjectRepository(LearningEventEntity)
     private readonly eventRepo: Repository<LearningEventEntity>,
-    private readonly aiService: AIService,
+    private readonly sessions: SessionService,
+    private readonly checks: SessionCheckService,
   ) {}
 
-  async startSession(userId: string, data: { topic: string; subtopic?: string }) {
-    const session = this.sessionRepo.create({
-      userId,
+  /**
+   * Legacy start endpoint, kept so already-installed agents keep working.
+   *
+   * It now delegates to SessionService rather than minting its own row. Any
+   * surface still calling this joins the shared session instead of creating a
+   * competing one, which is what produced three concurrent "active" sessions.
+   */
+  async startSession(
+    userId: string,
+    data: { topic: string; subtopic?: string; surface?: string },
+  ) {
+    const { session } = await this.sessions.start(userId, {
       topic: data.topic,
       subtopic: data.subtopic,
-      startTime: new Date(),
-      status: 'active',
+      surface: data.surface,
     });
-    return this.sessionRepo.save(session);
+
+    // Shaped like the old response (callers read `.id`), with the session view
+    // attached for clients that understand it.
+    const entity = await this.sessionRepo.findOne({ where: { id: session.id } });
+    return { ...entity, session };
   }
 
   async endSession(userId: string, sessionId: string, confidence?: number) {
-    const session = await this.sessionRepo.findOne({
-      where: { id: sessionId, userId },
-    });
-    if (!session) throw new NotFoundException('Session not found');
-
-    session.endTime = new Date();
-    session.status = 'completed';
-    session.duration = Math.floor(
-      (session.endTime.getTime() - session.startTime.getTime()) / 1000,
-    );
-    if (confidence !== undefined) session.confidence = confidence;
-
-    return this.sessionRepo.save(session);
+    // Ends it for every participating surface, not just the caller.
+    return this.sessions.end(userId, { sessionId, confidence });
   }
 
   async getHistory(userId: string, limit = 20) {
@@ -88,41 +101,14 @@ export class LearningService {
     });
     if (!session) throw new NotFoundException('Active session not found');
 
-    const result = await this.aiService.getProvider().complete({
-      systemPrompt: `You are a learning assistant. Generate ONE quick knowledge check question about the given topic. 
-The question should:
-- Be answerable in 1-2 sentences
-- Test understanding, not memorization
-- Be specific to the topic
-
-Return ONLY valid JSON:
-{ "id": "iq_<random>", "question": "your question", "type": "recall", "expectedAnswer": "brief expected answer" }`,
-      messages: [
-        { role: 'user', content: `Topic: ${topic}\n\nGenerate one quick check question.` },
-      ],
-      temperature: 0.8,
-      responseFormat: 'json',
-    });
-
-    try {
-      const parsed = JSON.parse(result.content);
-      // Record the quiz event
-      await this.eventRepo.save(this.eventRepo.create({
-        userId,
-        sessionId,
-        eventType: 'interval_quiz_shown',
-        source: 'web',
-        topic,
-        metadata: { quizId: parsed.id, question: parsed.question },
-      }));
-      return parsed;
-    } catch {
-      return {
-        id: `iq_${Date.now()}`,
-        question: `Explain what you've learned about ${topic} so far in your own words.`,
-        type: 'recall',
-      };
+    // Delegates to the shared check service. This used to be a second, slightly
+    // different implementation of question generation, so answers were graded
+    // by rules that did not quite match how the question had been produced.
+    if (topic?.trim() && topic.trim() !== session.topic) {
+      session.topic = topic.trim();
     }
+
+    return this.checks.generate(userId, session, sourceOf(session) as Surface);
   }
 
   /**
@@ -134,37 +120,10 @@ Return ONLY valid JSON:
     quizId: string,
     answer: string,
   ) {
-    const session = await this.sessionRepo.findOne({
-      where: { id: sessionId, userId },
-    });
-    if (!session) throw new NotFoundException('Session not found');
-
-    const result = await this.aiService.getProvider().complete({
-      systemPrompt: `You are scoring a quick learning check answer. The student is studying "${session.topic}".
-Be encouraging but honest. Score whether they demonstrate understanding.
-Return ONLY valid JSON: { "correct": true/false, "feedback": "1-2 sentence feedback" }`,
-      messages: [
-        { role: 'user', content: `Question context: A quiz about "${session.topic}"\nStudent answer: "${answer}"\n\nScore this.` },
-      ],
-      temperature: 0.3,
-      responseFormat: 'json',
-    });
-
-    let scored = { correct: true, feedback: 'Good effort! Keep learning.' };
-    try {
-      scored = JSON.parse(result.content);
-    } catch {}
-
-    // Record the answer event
-    await this.eventRepo.save(this.eventRepo.create({
-      userId,
-      sessionId,
-      eventType: 'interval_quiz_answered',
-      source: 'web',
-      topic: session.topic,
-      metadata: { quizId, answer, correct: scored.correct },
-    }));
-
-    return scored;
+    // Grading lives in the shared check service, which looks the question up by
+    // check id. This method previously took the newest `interval_quiz_shown`
+    // row for the session, so once more than one surface could be issued a
+    // check, an answer was graded against whichever question came last.
+    return this.checks.answer(userId, quizId, answer, sessionId);
   }
 }

@@ -63,7 +63,11 @@ export class AIService implements OnModuleInit {
 Rules:
 - Generate exactly ${params.questionCount} questions
 - Each question must have: id (q1, q2...), text (the question), type (one of: concept_explanation, coding_challenge, mcq, debugging, practical_task), maxScore (20 per question)
-- For MCQ questions, include an "options" array with exactly 4 choices
+- For "mcq" questions you MUST include:
+    "options": an array of exactly 4 choices, and
+    "correctAnswer": the exact text of the single correct option, copied verbatim from "options"
+- For open-ended questions (concept_explanation, coding_challenge, debugging, practical_task) include:
+    "expectedKeyPoints": an array of 2-4 short strings naming what a correct answer must contain
 - Questions should be at ${params.difficulty} difficulty level
 - Questions must be specific, unambiguous, and test real understanding (not rote memorization)
 - Mix question types when possible for a well-rounded assessment

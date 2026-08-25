@@ -3,6 +3,22 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  Dialog,
+  EmptyState,
+  Input,
+  List,
+  ListRow,
+  Page,
+  PageHeader,
+  PageLoading,
+  Section,
+  Textarea,
+} from '@/components/ui';
 
 interface StudyGroup {
   id: string;
@@ -40,10 +56,10 @@ export default function GroupsPage() {
   const [newDesc, setNewDesc] = useState('');
   const [creating, setCreating] = useState(false);
   const [joining, setJoining] = useState<string | null>(null);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
+    if (!localStorage.getItem('accessToken')) {
       router.push('/login');
       return;
     }
@@ -52,10 +68,13 @@ export default function GroupsPage() {
 
   const loadGroups = async () => {
     try {
-      const data = await api.request<StudyGroup[]>('/groups');
-      setGroups(data);
+      setGroups(await api.request<StudyGroup[]>('/groups'));
     } catch (err: any) {
-      if (err.message?.includes('401')) router.push('/login');
+      if (err.message?.includes('401')) {
+        router.push('/login');
+        return;
+      }
+      setError(err.message || 'Could not load groups');
     } finally {
       setLoading(false);
     }
@@ -64,178 +83,195 @@ export default function GroupsPage() {
   const createGroup = async () => {
     if (!newName.trim()) return;
     setCreating(true);
+    setError('');
+
     try {
       await api.request<StudyGroup>('/groups/create', {
         method: 'POST',
-        body: JSON.stringify({ name: newName.trim(), description: newDesc.trim() || undefined }),
+        body: JSON.stringify({
+          name: newName.trim(),
+          description: newDesc.trim() || undefined,
+        }),
       });
       setNewName('');
       setNewDesc('');
       setShowCreate(false);
       await loadGroups();
-    } catch {}
-    setCreating(false);
+    } catch (err: any) {
+      setError(err.message || 'Could not create the group');
+    } finally {
+      setCreating(false);
+    }
   };
 
   const joinGroup = async (groupId: string) => {
     setJoining(groupId);
+    setError('');
     try {
-      await api.request('/groups/' + groupId + '/join', { method: 'POST', body: '{}' });
-      if (selectedGroup === groupId) {
-        await loadGroupDetail(groupId);
-      }
-    } catch {}
-    setJoining(null);
+      await api.request(`/groups/${groupId}/join`, { method: 'POST', body: '{}' });
+      await loadGroupDetail(groupId);
+    } catch (err: any) {
+      setError(err.message || 'Could not join that group');
+    } finally {
+      setJoining(null);
+    }
   };
 
   const loadGroupDetail = async (groupId: string) => {
     setSelectedGroup(groupId);
     try {
       const [group, membersData, lb] = await Promise.all([
-        api.request<StudyGroup>('/groups/' + groupId),
-        api.request<GroupMember[]>('/groups/' + groupId + '/members'),
-        api.request<LeaderboardEntry[]>('/groups/' + groupId + '/leaderboard'),
+        api.request<StudyGroup>(`/groups/${groupId}`),
+        api.request<GroupMember[]>(`/groups/${groupId}/members`),
+        api.request<LeaderboardEntry[]>(`/groups/${groupId}/leaderboard`),
       ]);
       setGroupDetail(group);
       setMembers(membersData);
       setLeaderboard(lb);
-    } catch {}
+    } catch (err: any) {
+      setError(err.message || 'Could not load that group');
+    }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full min-h-[60vh]">
-        <div className="w-5 h-5 border-2 border-gray-300 dark:border-gray-600 border-t-gray-900 dark:border-t-gray-100 rounded-full animate-spin" />
-      </div>
-    );
-  }
+  if (loading) return <PageLoading />;
 
   return (
-    <div className="p-6 md:p-10 max-w-4xl mx-auto space-y-8">
-      <header className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-50 tracking-tight">Study Groups</h1>
-          <p className="text-sm text-gray-500 mt-1">Collaborate and compete with other learners</p>
-        </div>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="px-4 py-2 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
-        >
-          + Create Group
-        </button>
-      </header>
+    <Page>
+      <PageHeader
+        title="Study groups"
+        description="Compare progress with other learners working on the same things."
+        actions={
+          <Button variant="primary" icon="plus" onClick={() => setShowCreate(true)}>
+            Create group
+          </Button>
+        }
+      />
 
-      {/* Create form */}
-      {showCreate && (
-        <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface p-5 space-y-4">
-          <input
+      {error && <Alert>{error}</Alert>}
+
+      {groups.length === 0 ? (
+        <EmptyState
+          icon="users"
+          title="No groups yet"
+          description="Create a group and share it with people studying the same topic."
+          action={
+            <Button variant="primary" onClick={() => setShowCreate(true)}>
+              Create a group
+            </Button>
+          }
+        />
+      ) : (
+        <Section title="Groups">
+          <List>
+            {groups.map((group) => (
+              <ListRow
+                key={group.id}
+                onClick={() => loadGroupDetail(group.id)}
+                className={
+                  selectedGroup === group.id ? 'bg-gray-50 dark:bg-dark-tertiary' : undefined
+                }
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm text-gray-900 dark:text-gray-100">
+                    {group.name}
+                  </span>
+                  <span className="mt-0.5 block truncate text-2xs text-gray-500 dark:text-gray-400">
+                    {group.description || `Created by ${group.creator?.name || 'someone'}`}
+                  </span>
+                </span>
+                <Button
+                  size="sm"
+                  onClick={() => joinGroup(group.id)}
+                  loading={joining === group.id}
+                >
+                  Join
+                </Button>
+              </ListRow>
+            ))}
+          </List>
+        </Section>
+      )}
+
+      {selectedGroup && groupDetail && (
+        <>
+          <Section
+            title="Leaderboard"
+            description={`Average mastery across ${groupDetail.name}`}
+          >
+            {leaderboard.length === 0 ? (
+              <Card>
+                <p className="text-xs text-gray-500 dark:text-gray-400">No members yet.</p>
+              </Card>
+            ) : (
+              <List>
+                {leaderboard.map((entry, idx) => (
+                  <ListRow key={entry.userId}>
+                    <span className="flex min-w-0 items-center gap-3">
+                      <span className="w-4 shrink-0 text-2xs tabular-nums text-gray-500 dark:text-gray-400">
+                        {idx + 1}
+                      </span>
+                      <span className="truncate text-sm text-gray-900 dark:text-gray-100">
+                        {entry.name}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-sm font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                      {Math.round(entry.averageMastery)}%
+                    </span>
+                  </ListRow>
+                ))}
+              </List>
+            )}
+          </Section>
+
+          <Section title={`Members (${members.length})`}>
+            <List>
+              {members.map((member) => (
+                <ListRow key={member.id}>
+                  <span className="truncate text-sm text-gray-900 dark:text-gray-100">
+                    {member.user?.name || 'Unknown'}
+                  </span>
+                  <Badge tone={member.role === 'owner' ? 'accent' : 'neutral'}>{member.role}</Badge>
+                </ListRow>
+              ))}
+            </List>
+          </Section>
+        </>
+      )}
+
+      <Dialog
+        open={showCreate}
+        onClose={() => setShowCreate(false)}
+        title="Create a group"
+        footer={
+          <>
+            <Button onClick={() => setShowCreate(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={createGroup}
+              loading={creating}
+              disabled={!newName.trim()}
+            >
+              Create
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <Input
+            label="Name"
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            placeholder="Group name"
-            className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            placeholder="Systems design study group"
           />
-          <textarea
+          <Textarea
+            label="Description"
+            hint="Optional"
             value={newDesc}
             onChange={(e) => setNewDesc(e.target.value)}
-            placeholder="Description (optional)"
-            rows={2}
-            className="w-full rounded-lg border border-gray-200 dark:border-gray-700 bg-transparent px-4 py-2.5 text-sm text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none"
+            placeholder="What the group is working through"
           />
-          <div className="flex gap-2">
-            <button
-              onClick={createGroup}
-              disabled={creating || !newName.trim()}
-              className="px-4 py-2 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 disabled:opacity-50 transition-colors"
-            >
-              {creating ? 'Creating...' : 'Create'}
-            </button>
-            <button
-              onClick={() => setShowCreate(false)}
-              className="px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-sm text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-dark-tertiary transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
         </div>
-      )}
-
-      {/* Groups list */}
-      <div className="grid gap-3">
-        {groups.length === 0 && (
-          <p className="text-sm text-gray-400 text-center py-8">No groups yet. Create one to get started!</p>
-        )}
-        {groups.map((group) => (
-          <button
-            key={group.id}
-            onClick={() => loadGroupDetail(group.id)}
-            className={`w-full text-left rounded-2xl border p-5 transition-all ${
-              selectedGroup === group.id
-                ? 'border-primary-300 dark:border-primary-700 bg-primary-50/50 dark:bg-primary-900/10'
-                : 'border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface hover:border-gray-300 dark:hover:border-gray-700'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{group.name}</p>
-                {group.description && (
-                  <p className="text-xs text-gray-500 mt-0.5">{group.description}</p>
-                )}
-                <p className="text-xs text-gray-400 mt-1">Created by {group.creator?.name || 'Unknown'}</p>
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); joinGroup(group.id); }}
-                disabled={joining === group.id}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-100 dark:bg-dark-tertiary text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
-              >
-                {joining === group.id ? 'Joining...' : 'Join'}
-              </button>
-            </div>
-          </button>
-        ))}
-      </div>
-
-      {/* Group detail */}
-      {selectedGroup && groupDetail && (
-        <div className="space-y-6">
-          {/* Leaderboard */}
-          <section className="space-y-3">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Leaderboard</h2>
-            <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface divide-y divide-gray-100 dark:divide-gray-800">
-              {leaderboard.length === 0 && (
-                <p className="text-sm text-gray-400 text-center py-4">No members yet</p>
-              )}
-              {leaderboard.map((entry, idx) => (
-                <div key={entry.userId} className="flex items-center justify-between px-5 py-3.5">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-gray-400 w-5">{idx + 1}</span>
-                    <span className="text-sm text-gray-700 dark:text-gray-300">{entry.name}</span>
-                  </div>
-                  <span className="text-xs tabular-nums font-medium text-primary-600">{entry.averageMastery}%</span>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Members */}
-          <section className="space-y-3">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wider">Members ({members.length})</h2>
-            <div className="rounded-2xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-dark-surface divide-y divide-gray-100 dark:divide-gray-800">
-              {members.map((member) => (
-                <div key={member.id} className="flex items-center justify-between px-5 py-3.5">
-                  <span className="text-sm text-gray-700 dark:text-gray-300">{member.user?.name || 'Unknown'}</span>
-                  <span className={`text-xs px-2 py-0.5 rounded-full ${
-                    member.role === 'owner'
-                      ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
-                      : 'bg-gray-100 dark:bg-gray-800 text-gray-500'
-                  }`}>
-                    {member.role}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        </div>
-      )}
-    </div>
+      </Dialog>
+    </Page>
   );
 }

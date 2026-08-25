@@ -6,6 +6,16 @@
  */
 
 import { getApiBase } from './config.js';
+import {
+  SURFACE,
+  isCapturing,
+  pulse,
+  syncSession,
+  getCachedSession,
+  fetchActiveSession,
+  startSession,
+  endSession,
+} from './session.js';
 
 const MIN_TIME_FOR_QUIZ = 60; // seconds minimum before triggering quiz
 
@@ -47,6 +57,29 @@ function saveState() {
   chrome.storage.local.set({ trackedTabs, eventQueue });
 }
 
+/**
+ * Capture requires two things: the user has not paused the extension locally,
+ * and a shared session is actually running with this surface participating.
+ *
+ * The second condition is the point of the unified session — the extension no
+ * longer records whenever it happens to be installed.
+ */
+function shouldCapture() {
+  return trackingEnabled && isCapturing();
+}
+
+/** Reflect session state on the toolbar icon so the state is never a mystery. */
+function updateBadge() {
+  const session = getCachedSession();
+  if (!session) {
+    chrome.action.setBadgeText({ text: '' });
+    return;
+  }
+  const capturing = shouldCapture();
+  chrome.action.setBadgeText({ text: capturing ? 'on' : 'off' });
+  chrome.action.setBadgeBackgroundColor({ color: capturing ? '#16a34a' : '#71717a' });
+}
+
 // --- Helpers ---
 
 function isEducationalUrl(url) {
@@ -79,7 +112,7 @@ function log(msg, data) {
 
 // When user switches to a tab
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  if (!trackingEnabled) return;
+  if (!shouldCapture()) return;
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
     handleTab(activeInfo.tabId, tab);
@@ -90,7 +123,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 // When a tab finishes loading
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!trackingEnabled) return;
+  if (!shouldCapture()) return;
   if (changeInfo.status === 'complete' && tab.url) {
     handleTab(tabId, tab);
   }
@@ -98,7 +131,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 // When a tab is closed - THIS IS WHERE QUIZ TRIGGERS
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (!trackingEnabled) return;
+  if (!shouldCapture()) return;
   const entry = trackedTabs[tabId];
   if (!entry) return;
 
@@ -289,11 +322,84 @@ function getToken() {
   });
 }
 
-// --- Periodic Sync ---
+// --- Periodic sync ---
+//
+// One alarm drives everything. The pulse runs first so capture state is current
+// before events are flushed, and so the extension reattaches itself after the
+// service worker has been evicted and restarted.
+//
+// 0.5 is the smallest period Chrome honours reliably for alarms, which is why
+// the knowledge check interval is server-owned: the server decides when a check
+// is due, and whichever surface pulses next picks it up.
 chrome.alarms.create('syncEvents', { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'syncEvents') syncEvents();
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'syncEvents') return;
+  await tick();
 });
+
+/** One round of server contact, plus anything the server asked us to show. */
+async function tick() {
+  const { check, endedSession } = await pulse();
+  updateBadge();
+
+  if (check) await openCheckPopup(check);
+  if (endedSession) await showWrapUp(endedSession);
+
+  // Nothing captured outside a session, so nothing to flush either.
+  if (isCapturing()) await syncEvents();
+}
+
+/**
+ * Present a knowledge check assigned to this surface.
+ *
+ * Reuses the existing quiz popup window, which reads whatever is in
+ * `pendingQuiz`. The `kind` field tells it to submit to the session check
+ * endpoints rather than the context-quiz ones.
+ */
+async function openCheckPopup(check) {
+  const payload = {
+    kind: 'session-check',
+    id: check.id,
+    sessionId: check.sessionId,
+    topic: check.topic,
+    intervalSeconds: check.nextInSeconds,
+    questions: [{ id: check.id, text: check.question }],
+  };
+
+  await chrome.storage.local.set({ pendingQuiz: payload });
+  chrome.windows.create({
+    url: chrome.runtime.getURL('quiz-popup.html'),
+    type: 'popup',
+    width: 460,
+    height: 520,
+    focused: true,
+  });
+  log('Knowledge check popup opened', { checkId: check.id });
+}
+
+/**
+ * Say that the session finished elsewhere.
+ *
+ * The extension previously just went quiet, which is indistinguishable from it
+ * having broken. Guarded by a stored id so a repeated pulse cannot reopen it.
+ */
+async function showWrapUp(ended) {
+  const { lastWrapUpSessionId } = await chrome.storage.local.get('lastWrapUpSessionId');
+  if (lastWrapUpSessionId === ended.id) return;
+
+  await chrome.storage.local.set({ lastWrapUpSessionId: ended.id, pendingWrapUp: ended });
+  chrome.windows.create({
+    url: chrome.runtime.getURL('quiz-popup.html'),
+    type: 'popup',
+    width: 420,
+    height: 420,
+    focused: true,
+  });
+  log('Session ended elsewhere', { sessionId: ended.id, reason: ended.reason });
+}
+
+// Check immediately on startup rather than waiting up to 30s for the first alarm.
+tick().catch(() => {});
 
 // --- Messages ---
 
@@ -336,7 +442,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === 'GET_STATUS') {
-    chrome.storage.local.get(['user'], (data) => {
+    // Refresh session state before answering so the popup never shows stale
+    // capture status.
+    (async () => {
+      await syncSession();
+      updateBadge();
+
+      const { user } = await chrome.storage.local.get('user');
       const tabs = Object.entries(trackedTabs).map(([tabId, t]) => ({
         tabId: parseInt(tabId),
         url: t.url,
@@ -348,19 +460,50 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }));
 
       sendResponse({
-        loggedIn: !!data.user,
-        user: data.user,
+        loggedIn: !!user,
+        user,
         queueSize: eventQueue.length,
         trackingEnabled,
+        capturing: shouldCapture(),
+        session: getCachedSession(),
+        surface: SURFACE,
         trackedTabs: tabs,
       });
-    });
+    })();
+    return true;
+  }
+
+  if (msg.type === 'START_SESSION') {
+    (async () => {
+      try {
+        const session = await startSession(msg.topic);
+        updateBadge();
+        sendResponse({ ok: true, session });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
+    return true;
+  }
+
+  if (msg.type === 'END_SESSION') {
+    (async () => {
+      try {
+        await endSession();
+        trackedTabs = {};
+        saveState();
+        updateBadge();
+        sendResponse({ ok: true });
+      } catch (e) {
+        sendResponse({ ok: false, error: e.message });
+      }
+    })();
     return true;
   }
 
   // Content script sending context on page hide
   if (msg.type === 'CONTEXT_CAPTURED') {
-    if (trackingEnabled) {
+    if (shouldCapture()) {
       triggerQuiz(msg.data);
     }
     sendResponse({ ok: true });

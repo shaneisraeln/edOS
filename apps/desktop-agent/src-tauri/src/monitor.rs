@@ -6,6 +6,7 @@ use tauri::{AppHandle, State};
 use crate::auth::AppState;
 use crate::events::{EventQueue, LearningEvent};
 use crate::quiz;
+use crate::session::SessionManager;
 
 #[derive(Debug, Clone, Default)]
 pub struct WindowInfo {
@@ -126,6 +127,7 @@ pub fn start_monitor(
     app_state: &'static AppState,
     event_queue: &'static EventQueue,
     monitor_state: &'static MonitorState,
+    session_manager: &'static SessionManager,
 ) {
     thread::spawn(move || {
         let mut last: Option<ActiveWindowSnapshot> = None;
@@ -134,8 +136,16 @@ pub fn start_monitor(
         loop {
             thread::sleep(Duration::from_secs(3));
 
+            // Two gates. The local pause switch, and whether a shared session is
+            // actually running with this agent participating. The second is new:
+            // the agent used to record from the moment it launched, before the
+            // user had even signed in.
             let is_on = { *monitor_state.is_monitoring.lock().unwrap() };
-            if !is_on {
+            if !is_on || !session_manager.is_capturing() {
+                // Drop the previous window so time spent while paused is not
+                // later attributed as study time.
+                last = None;
+                window_start = Instant::now();
                 continue;
             }
 

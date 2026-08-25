@@ -6,6 +6,10 @@ import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { ConceptEntity } from '../../entities/concept.entity';
 import { AIService } from '../ai/ai.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
+import { AnswerGraderService, stripAnswerKey } from '../scoring/answer-grader.service';
+import { MasteryService } from '../scoring/mastery.service';
+import { ConceptResolverService } from '../scoring/concept-resolver.service';
+import { StoredQuestion } from '../scoring/scoring.types';
 
 interface ContextInput {
   context: string;
@@ -29,6 +33,9 @@ export class ContextQuizService {
     private readonly conceptRepo: Repository<ConceptEntity>,
     private readonly aiService: AIService,
     private readonly realtimeGateway: RealtimeGateway,
+    private readonly grader: AnswerGraderService,
+    private readonly mastery: MasteryService,
+    private readonly concepts: ConceptResolverService,
   ) {}
 
   /**
@@ -131,25 +138,19 @@ Generate 2-3 quiz questions about this topic.`,
 
     this.logger.log(`Quiz created: ${assessment.id} with ${parsed.questions.length} questions`);
 
-    // Update concept graph
+    // Note the concepts as seen. Generating a quiz is not evidence of knowing
+    // anything, so this records exposure only — the real signal arrives when the
+    // answers come back in submitAnswers().
     for (const conceptName of parsed.concepts || []) {
-      let concept = await this.conceptRepo.findOne({ where: { name: conceptName } });
-      if (!concept) {
-        concept = await this.conceptRepo.save(this.conceptRepo.create({ name: conceptName }));
-      }
-      let node = await this.nodeRepo.findOne({ where: { userId, conceptId: concept.id } });
-      if (!node) {
-        node = this.nodeRepo.create({
-          userId, conceptId: concept.id,
-          confidence: 15, mastery: 5, weaknessScore: 75,
-          practiceCount: 1, lastRevision: new Date(), revisionCount: 0,
+      const concept = await this.concepts.resolve(conceptName);
+      if (concept) {
+        await this.mastery.recordEvidence({
+          userId,
+          conceptId: concept.id,
+          kind: 'exposure',
+          isReview: false,
         });
-      } else {
-        node.practiceCount += 1;
-        node.lastRevision = new Date();
-        node.confidence = Math.min(100, node.confidence + 3);
       }
-      await this.nodeRepo.save(node);
     }
 
     // Push via WebSocket
@@ -158,7 +159,7 @@ Generate 2-3 quiz questions about this topic.`,
       topic: parsed.detectedTopic || input.title,
       source: input.source,
       title: input.title,
-      questions: parsed.questions,
+      questions: stripAnswerKey(parsed.questions as Record<string, unknown>[]),
       concepts: parsed.concepts || [],
       timeLimit: 180,
     };
@@ -176,60 +177,70 @@ Generate 2-3 quiz questions about this topic.`,
     if (!assessment) return { error: 'Quiz not found' };
     if (assessment.status === 'completed') return { error: 'Already submitted' };
 
-    const scoringResult = await this.aiService.scoreAssessment({
-      questions: assessment.questions,
+    const questions = (assessment.questions || []) as StoredQuestion[];
+
+    const result = await this.grader.grade({
+      questions,
       answers,
       topic: assessment.topic,
     });
 
-    assessment.score = scoringResult.totalScore;
+    assessment.score = result.totalScore;
+    assessment.maxScore = result.gradableMaxScore || result.declaredMaxScore;
     assessment.status = 'completed';
     assessment.completedAt = new Date();
-    assessment.feedback = scoringResult.feedback;
-    assessment.questions = scoringResult.scoredQuestions.length > 0
-      ? scoringResult.scoredQuestions
-      : assessment.questions;
+    assessment.feedback = result.feedback;
+
+    // Merge grades onto the stored questions rather than replacing them.
+    const gradeById = new Map(result.questions.map((q) => [q.questionId, q]));
+    assessment.questions = questions.map((q) => {
+      const grade = gradeById.get(q.id);
+      return grade ? { ...q, score: grade.score, feedback: grade.feedback, correct: grade.correct } : q;
+    });
+
     await this.assessmentRepo.save(assessment);
 
-    // Update knowledge graph
-    const scorePercent = assessment.maxScore > 0
-      ? (scoringResult.totalScore / assessment.maxScore) * 100
-      : 50;
-
-    const concept = await this.conceptRepo.findOne({ where: { name: assessment.topic } });
-    if (concept) {
-      let node = await this.nodeRepo.findOne({ where: { userId, conceptId: concept.id } });
-      if (node) {
-        node.mastery = Math.round(node.mastery * 0.4 + scorePercent * 0.6);
-        node.confidence = Math.round(node.confidence * 0.4 + scorePercent * 0.6);
-        node.assessmentScore = scorePercent;
-        node.weaknessScore = Math.max(0, 100 - node.mastery);
-        node.revisionCount += 1;
-        await this.nodeRepo.save(node);
+    // Only move mastery when something was gradable. The old code fell back to
+    // an arbitrary 50% when maxScore was 0, inventing a score from nothing.
+    if (result.percentage !== null) {
+      const concept = await this.concepts.resolve(assessment.topic);
+      if (concept) {
+        await this.mastery.recordEvidence({
+          userId,
+          conceptId: concept.id,
+          kind: 'context_quiz',
+          scoreFraction: result.percentage / 100,
+          difficulty: assessment.difficulty,
+          isReview: true,
+        });
       }
     }
 
-    this.realtimeGateway.notifyUser(userId, 'context-quiz:result', {
-      quizId, score: scoringResult.totalScore,
+    const payload = {
+      quizId,
+      score: result.totalScore,
       maxScore: assessment.maxScore,
-      percentage: Math.round(scorePercent),
-      feedback: scoringResult.feedback,
-    });
-
-    return {
-      score: scoringResult.totalScore,
-      maxScore: assessment.maxScore,
-      percentage: Math.round(scorePercent),
-      feedback: scoringResult.feedback,
-      scoredQuestions: scoringResult.scoredQuestions,
+      percentage: result.percentage === null ? null : Math.round(result.percentage),
+      feedback: result.feedback,
+      degraded: result.degraded,
     };
+
+    this.realtimeGateway.notifyUser(userId, 'context-quiz:result', payload);
+
+    return { ...payload, scoredQuestions: result.questions };
   }
 
   async getPendingQuiz(userId: string) {
-    return this.assessmentRepo.findOne({
+    const quiz = await this.assessmentRepo.findOne({
       where: { userId, type: 'context_quiz', status: 'pending' },
       order: { generatedAt: 'DESC' },
     });
+    if (!quiz) return null;
+
+    return {
+      ...quiz,
+      questions: stripAnswerKey((quiz.questions || []) as Record<string, unknown>[]),
+    };
   }
 
   async skipQuiz(userId: string, quizId: string) {

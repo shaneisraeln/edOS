@@ -3,129 +3,167 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { Alert, Button, Icon, type IconName } from '@/components/ui';
 
-const CURRICULA = [
-  { id: 'ml', name: 'Machine Learning', icon: '🤖' },
-  { id: 'web-dev', name: 'Web Development', icon: '🌐' },
-  { id: 'data-science', name: 'Data Science', icon: '📊' },
-  { id: 'cloud', name: 'Cloud Computing', icon: '☁️' },
-  { id: 'cyber-sec', name: 'Cyber Security', icon: '🔒' },
-  { id: 'ai-eng', name: 'AI Engineering', icon: '🧠' },
+const CURRICULA: { id: string; name: string; description: string; icon: IconName }[] = [
+  { id: 'ml', name: 'Machine learning', description: 'Models, training, evaluation', icon: 'sparkle' },
+  { id: 'web-dev', name: 'Web development', description: 'Frontend, backend, APIs', icon: 'globe' },
+  { id: 'data-science', name: 'Data science', description: 'Analysis, statistics, viz', icon: 'graph' },
+  { id: 'cloud', name: 'Cloud computing', description: 'Infra, deployment, scale', icon: 'desktop' },
+  { id: 'cyber-sec', name: 'Cyber security', description: 'Threats, defence, crypto', icon: 'shield' },
+  { id: 'ai-eng', name: 'AI engineering', description: 'LLMs, agents, pipelines', icon: 'terminal' },
 ];
 
 const SKILL_LEVELS = [
-  { id: 'beginner', label: 'Beginner', description: 'Just getting started' },
-  { id: 'intermediate', label: 'Intermediate', description: 'Some prior knowledge' },
-  { id: 'advanced', label: 'Advanced', description: 'Deep understanding, want mastery' },
+  { id: 'beginner', label: 'Beginner', description: 'Starting from the fundamentals.' },
+  { id: 'intermediate', label: 'Intermediate', description: 'Comfortable with the basics.' },
+  { id: 'advanced', label: 'Advanced', description: 'Chasing depth and edge cases.' },
 ];
 
 export default function OnboardingPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
-  const [selectedCurriculum, setSelectedCurriculum] = useState<string | null>(null);
-  const [selectedLevel, setSelectedLevel] = useState<string | null>(null);
+  const [curriculum, setCurriculum] = useState<string | null>(null);
+  const [level, setLevel] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
-  const handleComplete = async () => {
-    if (!selectedCurriculum || !selectedLevel) return;
+  const complete = async () => {
+    if (!curriculum || !level) return;
     setLoading(true);
+    setError('');
 
     try {
-      const curriculum = CURRICULA.find((c) => c.id === selectedCurriculum);
-      await api.setGoal(selectedCurriculum, curriculum!.name, selectedLevel);
+      const chosen = CURRICULA.find((c) => c.id === curriculum)!;
+      await api.setGoal(curriculum, chosen.name, level);
       router.push('/dashboard');
-    } catch (err) {
-      console.error('Failed to set goal:', err);
-      router.push('/dashboard');
-    } finally {
+    } catch (err: any) {
+      setError(err.message || 'Could not save your goal. You can set it later in the dashboard.');
       setLoading(false);
     }
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-4">
-      <div className="w-full max-w-lg space-y-8">
-        {/* Progress */}
-        <div className="flex justify-center gap-2">
+    <main className="flex min-h-screen items-center justify-center px-6 py-12">
+      <div className="w-full max-w-lg animate-in">
+        <div className="mb-8 flex items-center gap-1.5">
           {[1, 2].map((s) => (
             <div
               key={s}
-              className={`h-1.5 w-16 rounded-full ${
-                s <= step ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'
+              className={`h-0.5 flex-1 rounded-full transition-colors ${
+                s <= step ? 'bg-gray-900 dark:bg-gray-100' : 'bg-gray-200 dark:bg-gray-800'
               }`}
             />
           ))}
         </div>
 
+        {error && (
+          <div className="mb-5">
+            <Alert>{error}</Alert>
+          </div>
+        )}
+
         {step === 1 && (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
-              <h1 className="text-2xl font-bold">What do you want to learn?</h1>
-              <p className="text-sm text-gray-500">Choose your primary learning goal</p>
+            <div>
+              <p className="text-2xs text-gray-500 dark:text-gray-400">Step 1 of 2</p>
+              <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50">
+                What are you learning?
+              </h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                This seeds your knowledge graph. You can add more later.
+              </p>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              {CURRICULA.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => setSelectedCurriculum(c.id)}
-                  className={`card text-left transition-all ${
-                    selectedCurriculum === c.id
-                      ? 'ring-2 ring-primary-500 border-primary-500'
-                      : 'hover:border-gray-300 dark:hover:border-gray-600'
-                  }`}
-                >
-                  <span className="text-2xl">{c.icon}</span>
-                  <p className="mt-2 font-medium text-sm">{c.name}</p>
-                </button>
-              ))}
+            <div className="grid gap-2 sm:grid-cols-2">
+              {CURRICULA.map((c) => {
+                const selected = curriculum === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setCurriculum(c.id)}
+                    aria-pressed={selected}
+                    className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
+                      selected
+                        ? 'border-gray-900 bg-gray-50 dark:border-gray-100 dark:bg-dark-tertiary'
+                        : 'bg-surface hover:border-gray-300 dark:bg-dark-surface dark:hover:border-gray-700'
+                    }`}
+                  >
+                    <Icon
+                      name={c.icon}
+                      className="mt-0.5 h-4 w-4 shrink-0 text-gray-500 dark:text-gray-400"
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {c.name}
+                      </span>
+                      <span className="mt-0.5 block text-2xs text-gray-500 dark:text-gray-400">
+                        {c.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
-            <button
-              onClick={() => setStep(2)}
-              className="btn-primary w-full"
-              disabled={!selectedCurriculum}
-            >
+            <Button variant="primary" block onClick={() => setStep(2)} disabled={!curriculum}>
               Continue
-            </button>
+            </Button>
           </div>
         )}
 
         {step === 2 && (
           <div className="space-y-6">
-            <div className="text-center space-y-2">
-              <h1 className="text-2xl font-bold">Your current skill level?</h1>
-              <p className="text-sm text-gray-500">This helps us calibrate assessments</p>
+            <div>
+              <p className="text-2xs text-gray-500 dark:text-gray-400">Step 2 of 2</p>
+              <h1 className="mt-1 text-2xl font-semibold text-gray-900 dark:text-gray-50">
+                Where are you starting from?
+              </h1>
+              <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                Used to calibrate how hard your first questions are.
+              </p>
             </div>
 
-            <div className="space-y-3">
-              {SKILL_LEVELS.map((level) => (
-                <button
-                  key={level.id}
-                  onClick={() => setSelectedLevel(level.id)}
-                  className={`card w-full text-left transition-all ${
-                    selectedLevel === level.id
-                      ? 'ring-2 ring-primary-500 border-primary-500'
-                      : 'hover:border-gray-300 dark:hover:border-gray-600'
-                  }`}
-                >
-                  <p className="font-medium">{level.label}</p>
-                  <p className="text-sm text-gray-500 mt-0.5">{level.description}</p>
-                </button>
-              ))}
+            <div className="space-y-2">
+              {SKILL_LEVELS.map((l) => {
+                const selected = level === l.id;
+                return (
+                  <button
+                    key={l.id}
+                    type="button"
+                    onClick={() => setLevel(l.id)}
+                    aria-pressed={selected}
+                    className={`w-full rounded-xl border p-4 text-left transition-colors ${
+                      selected
+                        ? 'border-gray-900 bg-gray-50 dark:border-gray-100 dark:bg-dark-tertiary'
+                        : 'bg-surface hover:border-gray-300 dark:bg-dark-surface dark:hover:border-gray-700'
+                    }`}
+                  >
+                    <span className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+                      {l.label}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">
+                      {l.description}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
 
-            <div className="flex gap-3">
-              <button onClick={() => setStep(1)} className="btn-secondary flex-1">
+            <div className="flex gap-2">
+              <Button className="flex-1" onClick={() => setStep(1)}>
                 Back
-              </button>
-              <button
-                onClick={handleComplete}
-                className="btn-primary flex-1"
-                disabled={!selectedLevel || loading}
+              </Button>
+              <Button
+                variant="primary"
+                className="flex-1"
+                onClick={complete}
+                loading={loading}
+                disabled={!level}
               >
-                {loading ? 'Setting up...' : 'Start Learning'}
-              </button>
+                Start learning
+              </Button>
             </div>
           </div>
         )}

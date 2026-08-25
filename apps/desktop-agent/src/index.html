@@ -135,6 +135,25 @@
 
     .tag.tracked { color: var(--accent); border-color: var(--accent); }
 
+    /* Surface chips */
+    .chips { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .chip .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .chip.live { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+    .chip.idle { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
     /* Event list */
     .events { max-height: 132px; overflow-y: auto; }
 
@@ -265,6 +284,31 @@
 
   <!-- Signed in -->
   <section id="mainSection" class="hidden">
+    <!-- Shared session. Starting here also activates the browser extension and
+         the editor extension; ending here stops all of them. -->
+    <p class="section-label">Session</p>
+    <div class="panel">
+      <div class="now" id="sessionBox">
+        <p class="title" id="sessionTitle">No session</p>
+        <p class="meta" id="sessionMeta">Start one here, or from the web app.</p>
+      </div>
+
+      <div class="row hidden" id="surfaceRow">
+        <span class="row-label">Surfaces</span>
+        <span class="chips" id="surfaceChips"></span>
+      </div>
+
+      <div style="padding:10px 12px; border-top:1px solid var(--border)">
+        <label class="field hidden" id="topicField">
+          <span>Topic</span>
+          <input type="text" id="sessionTopic" placeholder="What are you learning?">
+        </label>
+        <button type="button" class="btn-solid" id="sessionBtn">Start session</button>
+      </div>
+    </div>
+
+    <p class="msg" id="sessionMsg" role="status"></p>
+
     <p class="section-label">Now monitoring</p>
     <div class="panel">
       <div class="now" id="currentActivity">
@@ -340,6 +384,7 @@
     }
 
     function showLogin() {
+      sessionState = null;
       $('loginSection').classList.remove('hidden');
       $('mainSection').classList.add('hidden');
       $('statusPill').className = 'pill';
@@ -351,14 +396,195 @@
       $('mainSection').classList.remove('hidden');
       $('userName').textContent = status.user_name || '—';
       updateMonitorUI(status.monitoring);
+      refreshSession();
     }
 
+    /** Last session state, so the button knows whether to start or end. */
+    let sessionState = null;
+    /** Local pause switch, tracked so the status pill can explain itself. */
+    let monitoringOn = true;
+
     function updateMonitorUI(isOn) {
-      $('statusPill').className = `pill ${isOn ? 'on' : 'paused'}`;
-      $('statusText').textContent = isOn ? 'Monitoring' : 'Paused';
+      monitoringOn = isOn;
       $('monitorStatus').textContent = isOn ? 'Active' : 'Paused';
       $('toggleBtn').textContent = isOn ? 'Pause monitoring' : 'Resume monitoring';
+      renderStatusPill();
     }
+
+    /**
+     * The pill distinguishes the reasons nothing is being captured. It used to
+     * say "Monitoring" purely from the local switch, which read as active even
+     * with no session running and nothing being recorded.
+     */
+    function renderStatusPill() {
+      const pill = $('statusPill');
+      const text = $('statusText');
+
+      if (!sessionState || !sessionState.active) {
+        pill.className = 'pill';
+        text.textContent = 'No session';
+        return;
+      }
+
+      if (!monitoringOn) {
+        pill.className = 'pill paused';
+        text.textContent = 'Paused here';
+        return;
+      }
+
+      if (!sessionState.capturing) {
+        pill.className = 'pill paused';
+        text.textContent = 'Not capturing';
+        return;
+      }
+
+      pill.className = 'pill on';
+      text.textContent = 'Capturing';
+    }
+
+    const SURFACE_LABEL = {
+      web: 'Web',
+      desktop: 'Desktop',
+      browser: 'Browser',
+      ide: 'Editor',
+    };
+
+    const PERMISSION_LABEL = {
+      screenContext: 'Screen context',
+      browser: 'Browser activity',
+      ide: 'Editor activity',
+      documents: 'Documents',
+      aiPlatforms: 'AI platforms',
+    };
+
+    function renderSession(status) {
+      sessionState = status;
+      renderStatusPill();
+
+      const title = $('sessionTitle');
+      const meta = $('sessionMeta');
+      const btn = $('sessionBtn');
+      const topicField = $('topicField');
+      const surfaceRow = $('surfaceRow');
+
+      if (!status || !status.active) {
+        title.textContent = 'No session';
+        meta.textContent = 'Start one here, or from the web app.';
+        btn.textContent = 'Start session';
+        btn.className = 'btn-solid';
+        topicField.classList.remove('hidden');
+        surfaceRow.classList.add('hidden');
+        return;
+      }
+
+      title.textContent = status.topic || 'Learning session';
+      btn.textContent = 'End session';
+      btn.className = 'btn-ghost';
+      topicField.classList.add('hidden');
+
+      if (status.blockedPermission) {
+        // Explain the silence rather than looking broken.
+        const label = PERMISSION_LABEL[status.blockedPermission] || status.blockedPermission;
+        meta.textContent = `Not capturing — turn on "${label}" in edOS settings.`;
+      } else if (!monitoringOn) {
+        meta.textContent = `Paused on this device · ${formatDuration(status.elapsedSeconds)}`;
+      } else {
+        const from = SURFACE_LABEL[status.initiatedBy] || status.initiatedBy || 'web';
+        meta.textContent = `${formatDuration(status.elapsedSeconds)} · started on ${from}`;
+      }
+
+      const live = (status.surfaces || []).filter((s) => s.status !== 'left');
+      surfaceRow.classList.toggle('hidden', live.length === 0);
+      const chips = $('surfaceChips');
+      chips.replaceChildren();
+
+      live.forEach((s) => {
+        const chip = document.createElement('span');
+        chip.className = `chip ${s.status === 'live' ? 'live' : 'idle'}`;
+
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+
+        const label = document.createElement('span');
+        label.textContent = SURFACE_LABEL[s.surface] || s.surface;
+
+        chip.append(dot, label);
+        chip.title = `${label.textContent} · ${s.status}`;
+        chips.append(chip);
+      });
+    }
+
+    function formatDuration(seconds) {
+      const total = Math.max(0, Math.round(seconds || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m`;
+      return `${total}s`;
+    }
+
+    function showSessionMsg(text, isError) {
+      const el = $('sessionMsg');
+      if (!text) {
+        el.classList.remove('visible');
+        return;
+      }
+      el.textContent = text;
+      el.classList.toggle('info', !isError);
+      el.classList.add('visible');
+    }
+
+    async function refreshSession() {
+      try {
+        renderSession(await invoke('get_session'));
+      } catch {
+        // Best effort; keep the last known state.
+      }
+    }
+
+    $('sessionBtn').addEventListener('click', async () => {
+      const btn = $('sessionBtn');
+      const ending = Boolean(sessionState && sessionState.active);
+
+      if (!ending) {
+        const topic = $('sessionTopic').value.trim();
+        if (!topic) {
+          showSessionMsg('Enter what you are learning.', true);
+          $('sessionTopic').focus();
+          return;
+        }
+
+        btn.disabled = true;
+        btn.textContent = 'Starting';
+        showSessionMsg('');
+
+        try {
+          renderSession(await invoke('start_session', { topic }));
+          $('sessionTopic').value = '';
+          await refreshSession();
+        } catch (e) {
+          showSessionMsg(typeof e === 'string' ? e : 'Could not start the session.', true);
+        } finally {
+          btn.disabled = false;
+          renderSession(sessionState);
+        }
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Ending';
+      showSessionMsg('');
+
+      try {
+        await invoke('end_session');
+        renderSession(null);
+      } catch (e) {
+        showSessionMsg(typeof e === 'string' ? e : 'Could not end the session.', true);
+      } finally {
+        btn.disabled = false;
+        renderSession(sessionState);
+      }
+    });
 
     function showError(msg, info) {
       const el = $('error');
@@ -468,6 +694,10 @@
         if (win && (win.title || win.process)) {
           renderCurrent(win.title, win.process, win.seconds, win.educational);
         }
+
+        // Reflect sessions started or ended on another surface. The Rust side
+        // refreshes this from the API on its own 30s tick.
+        renderSession(await invoke('get_session'));
       } catch {
         // Panel is best-effort; ignore transient IPC errors.
       }

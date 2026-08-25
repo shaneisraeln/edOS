@@ -259,6 +259,23 @@
 
   <!-- Signed in -->
   <section id="loggedInSection" class="hidden">
+    <!-- Shared session. Capture only happens while one is running, and it can
+         be started from any surface. -->
+    <div class="panel" id="sessionPanel">
+      <div class="row">
+        <span class="min-w-0">
+          <span class="row-label" id="sessionLabel">No session</span>
+          <span class="hint" id="sessionDetail" style="margin-top:2px"></span>
+        </span>
+        <button type="button" class="btn btn-solid" id="sessionBtn" style="flex:none;min-width:74px;padding:7px 10px">Start</button>
+      </div>
+      <div class="row hidden" id="surfaceRow">
+        <span class="row-label">Surfaces</span>
+        <span class="row-value" id="surfaceList">—</span>
+      </div>
+    </div>
+
+    <p class="section-label">Extension</p>
     <div class="panel">
       <div class="row">
         <span class="row-label">Tracking</span>

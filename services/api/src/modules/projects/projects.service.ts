@@ -5,6 +5,9 @@ import { ProjectEntity } from '../../entities/project.entity';
 import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { ConceptEntity } from '../../entities/concept.entity';
 import { AIService } from '../ai/ai.service';
+import { MasteryService } from '../scoring/mastery.service';
+import { ConceptResolverService } from '../scoring/concept-resolver.service';
+import { clamp } from '../scoring/scoring.constants';
 
 @Injectable()
 export class ProjectsService {
@@ -16,6 +19,8 @@ export class ProjectsService {
     @InjectRepository(ConceptEntity)
     private readonly conceptRepo: Repository<ConceptEntity>,
     private readonly aiService: AIService,
+    private readonly mastery: MasteryService,
+    private readonly concepts: ConceptResolverService,
   ) {}
 
   async create(userId: string, data: { title: string; description?: string; repository?: string; technologies?: string[]; curriculumId?: string }) {
@@ -80,40 +85,43 @@ Return ONLY valid JSON with:
     });
 
     try {
-      return JSON.parse(result.content);
+      const parsed = JSON.parse(result.content);
+      const score = Number(parsed?.score);
+      return {
+        ...parsed,
+        // null means "not reviewed", so it can be distinguished from a real 50.
+        score: Number.isFinite(score) ? clamp(score, 0, 100) : null,
+      };
     } catch {
-      return { score: 50, summary: 'Project reviewed.', strengths: [], improvements: [], conceptsDemo: [], nextSteps: 'Continue building.' };
+      return {
+        score: null,
+        summary: 'The review could not be completed. Resubmit to try again.',
+        strengths: [],
+        improvements: [],
+        conceptsDemo: [],
+        nextSteps: 'Continue building.',
+      };
     }
   }
 
   private async updateMasteryFromProject(userId: string, project: ProjectEntity) {
-    const score = project.score || 50;
+    // No score means the review failed. Recording an invented 50 would move
+    // mastery on the strength of nothing, which is what the old code did.
+    if (project.score === null || project.score === undefined) return;
 
-    for (const tech of project.technologies) {
-      const concept = await this.conceptRepo.findOne({ where: { name: tech } });
+    const scoreFraction = clamp(Number(project.score), 0, 100) / 100;
+
+    for (const tech of project.technologies || []) {
+      const concept = await this.concepts.resolve(tech);
       if (!concept) continue;
 
-      let node = await this.nodeRepo.findOne({ where: { userId, conceptId: concept.id } });
-      if (!node) {
-        node = this.nodeRepo.create({
-          userId,
-          conceptId: concept.id,
-          confidence: score * 0.6,
-          mastery: score * 0.5,
-          weaknessScore: Math.max(0, 100 - score * 0.5),
-          practiceCount: 1,
-          lastRevision: new Date(),
-          revisionCount: 1,
-        });
-      } else {
-        // Projects provide strong mastery signal
-        node.mastery = Math.min(100, Math.round(node.mastery * 0.6 + score * 0.4));
-        node.confidence = Math.min(100, Math.round(node.confidence * 0.6 + score * 0.4));
-        node.weaknessScore = Math.max(0, 100 - node.mastery);
-        node.practiceCount += 1;
-        node.lastRevision = new Date();
-      }
-      await this.nodeRepo.save(node);
+      await this.mastery.recordEvidence({
+        userId,
+        conceptId: concept.id,
+        kind: 'project',
+        scoreFraction,
+        isReview: true,
+      });
     }
   }
 }

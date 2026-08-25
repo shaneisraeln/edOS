@@ -1,8 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import {
+  Card,
+  EmptyState,
+  List,
+  ListRow,
+  Page,
+  PageHeader,
+  PageLoading,
+  Section,
+  Stat,
+} from '@/components/ui';
 
 interface DayActivity {
   date: string;
@@ -10,158 +20,135 @@ interface DayActivity {
   totalDuration: number;
 }
 
+const DAYS_SHOWN = 90;
+
 export default function TimelinePage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [dailySessions, setDailySessions] = useState<DayActivity[]>([]);
-  const [assessments, setAssessments] = useState<any[]>([]);
 
   useEffect(() => {
-    loadTimeline();
+    api
+      .getProgress()
+      .then((progress) => setDailySessions(progress.dailySessions || []))
+      .catch(() => setDailySessions([]))
+      .finally(() => setLoading(false));
   }, []);
 
-  const loadTimeline = async () => {
-    try {
-      const progress = await api.getProgress();
-      setDailySessions(progress.dailySessions || []);
-      setAssessments(progress.dailyAssessments || []);
-    } catch (err) {
-      console.error('Failed to load timeline:', err);
-    } finally {
-      setLoading(false);
+  const { weeks, stats } = useMemo(() => {
+    const byDate = new Map(dailySessions.map((s) => [s.date, s]));
+    const today = new Date();
+    const days: { date: string; level: number; sessions: number; minutes: number }[] = [];
+
+    for (let i = DAYS_SHOWN - 1; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const date = d.toISOString().split('T')[0];
+      const activity = byDate.get(date);
+      const sessions = Number(activity?.sessionCount ?? 0);
+      const duration = Number(activity?.totalDuration ?? 0);
+
+      let level = 0;
+      if (sessions > 0) level = 1;
+      if (duration > 1800) level = 2;
+      if (duration > 3600) level = 3;
+      if (duration > 7200) level = 4;
+
+      days.push({ date, level, sessions, minutes: Math.round(duration / 60) });
     }
-  };
 
-  // Build last 90 days grid
-  const today = new Date();
-  const days: { date: string; level: number; label: string }[] = [];
-  for (let i = 89; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const dateStr = d.toISOString().split('T')[0];
-    const activity = dailySessions.find((s) => s.date === dateStr);
-    const sessions = activity ? Number(activity.sessionCount) : 0;
-    const duration = activity ? Number(activity.totalDuration) : 0;
+    const grouped: (typeof days)[] = [];
+    for (let i = 0; i < days.length; i += 7) grouped.push(days.slice(i, i + 7));
 
-    let level = 0;
-    if (sessions > 0) level = 1;
-    if (duration > 1800) level = 2; // >30 min
-    if (duration > 3600) level = 3; // >1 hour
-    if (duration > 7200) level = 4; // >2 hours
+    const totalMinutes = dailySessions.reduce((s, d) => s + Number(d.totalDuration || 0), 0) / 60;
+    const totalSessions = dailySessions.reduce((s, d) => s + Number(d.sessionCount || 0), 0);
 
-    const label = `${dateStr}: ${sessions} sessions, ${Math.round(duration / 60)} min`;
-    days.push({ date: dateStr, level, label });
-  }
+    return {
+      weeks: grouped,
+      stats: {
+        activeDays: dailySessions.length,
+        minutes: Math.round(totalMinutes),
+        sessions: totalSessions,
+      },
+    };
+  }, [dailySessions]);
 
-  const weeks: typeof days[] = [];
-  for (let i = 0; i < days.length; i += 7) {
-    weeks.push(days.slice(i, i + 7));
-  }
+  if (loading) return <PageLoading />;
 
-  const levelColors = [
-    'bg-gray-100 dark:bg-dark-tertiary',
-    'bg-green-200 dark:bg-green-900/40',
-    'bg-green-400 dark:bg-green-700/60',
-    'bg-green-600 dark:bg-green-600/80',
-    'bg-green-800 dark:bg-green-500',
+  const levels = [
+    'bg-gray-100 dark:bg-gray-800',
+    'bg-primary-200 dark:bg-primary-900',
+    'bg-primary-300 dark:bg-primary-800',
+    'bg-primary-500 dark:bg-primary-600',
+    'bg-primary-700 dark:bg-primary-400',
   ];
 
-  // Calculate stats
-  const totalDays = dailySessions.length;
-  const totalMinutes = dailySessions.reduce((s, d) => s + Number(d.totalDuration || 0), 0) / 60;
-  const totalSessions = dailySessions.reduce((s, d) => s + Number(d.sessionCount || 0), 0);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center space-y-3">
-          <div className="w-8 h-8 border-2 border-primary-600 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm text-gray-500">Loading timeline...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 md:p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="card text-center">
-            <p className="text-xs text-gray-500">Active Days</p>
-            <p className="text-2xl font-bold text-primary-600">{totalDays}</p>
-            <p className="text-xs text-gray-400">last 90 days</p>
-          </div>
-          <div className="card text-center">
-            <p className="text-xs text-gray-500">Total Time</p>
-            <p className="text-2xl font-bold text-primary-600">{Math.round(totalMinutes)}</p>
-            <p className="text-xs text-gray-400">minutes</p>
-          </div>
-          <div className="card text-center">
-            <p className="text-xs text-gray-500">Sessions</p>
-            <p className="text-2xl font-bold text-primary-600">{totalSessions}</p>
-            <p className="text-xs text-gray-400">total</p>
-          </div>
-        </div>
+    <Page>
+      <PageHeader title="Timeline" description="Your study activity over the last 90 days." />
 
-        {/* Heatmap */}
-        <div className="card">
-          <h2 className="text-sm font-medium text-gray-500 mb-4">Activity Heatmap (Last 90 Days)</h2>
+      <div className="grid grid-cols-3 gap-3">
+        <Stat label="Active days" value={stats.activeDays} />
+        <Stat label="Minutes studied" value={stats.minutes} />
+        <Stat label="Sessions" value={stats.sessions} />
+      </div>
 
-          <div className="flex gap-1 overflow-x-auto pb-2">
+      <Section title="Activity">
+        <Card className="overflow-x-auto">
+          <div className="flex min-w-fit gap-[3px]">
             {weeks.map((week, wi) => (
-              <div key={wi} className="flex flex-col gap-1">
+              <div key={wi} className="flex flex-col gap-[3px]">
                 {week.map((day) => (
                   <div
                     key={day.date}
-                    className={`w-3 h-3 rounded-sm ${levelColors[day.level]} transition-colors`}
-                    title={day.label}
+                    className={`h-[11px] w-[11px] rounded-[2px] ${levels[day.level]}`}
+                    title={`${day.date} — ${day.sessions} session${day.sessions === 1 ? '' : 's'}, ${day.minutes} min`}
                   />
                 ))}
               </div>
             ))}
           </div>
 
-          {/* Legend */}
-          <div className="flex items-center gap-2 mt-4 text-xs text-gray-400">
-            <span>Less</span>
-            {levelColors.map((c, i) => (
-              <div key={i} className={`w-3 h-3 rounded-sm ${c}`} />
+          <div className="mt-3.5 flex items-center justify-end gap-1.5">
+            <span className="text-[9px] text-gray-500 dark:text-gray-400">Less</span>
+            {levels.map((c, i) => (
+              <div key={i} className={`h-[9px] w-[9px] rounded-[2px] ${c}`} />
             ))}
-            <span>More</span>
+            <span className="text-[9px] text-gray-500 dark:text-gray-400">More</span>
           </div>
-        </div>
+        </Card>
+      </Section>
 
-        {/* Recent Activity List */}
-        <div className="card">
-          <h2 className="text-sm font-medium text-gray-500 mb-4">Daily Breakdown</h2>
-          {dailySessions.length > 0 ? (
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {[...dailySessions].reverse().map((d) => (
-                <div key={d.date} className="flex items-center justify-between text-sm py-1.5 border-b border-gray-100 dark:border-gray-800 last:border-0">
-                  <span className="text-gray-600 dark:text-gray-300">
-                    {new Date(d.date + 'T00:00:00').toLocaleDateString(undefined, {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
+      <Section title="Daily breakdown">
+        {dailySessions.length === 0 ? (
+          <EmptyState
+            icon="timeline"
+            title="No activity recorded"
+            description="Start a session and your daily study time will appear here."
+          />
+        ) : (
+          <List>
+            {[...dailySessions].reverse().map((d) => (
+              <ListRow key={d.date}>
+                <span className="text-sm text-gray-900 dark:text-gray-100">
+                  {new Date(`${d.date}T00:00:00`).toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </span>
+                <span className="flex shrink-0 items-baseline gap-3 text-2xs tabular-nums text-gray-500 dark:text-gray-400">
+                  <span>
+                    {d.sessionCount} session{Number(d.sessionCount) === 1 ? '' : 's'}
                   </span>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-gray-400">{d.sessionCount} sessions</span>
-                    <span className="text-xs font-medium text-primary-600">
-                      {Math.round(Number(d.totalDuration) / 60)} min
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-gray-400 text-center py-4">
-              No activity recorded yet. Start a learning session to see your timeline.
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                    {Math.round(Number(d.totalDuration) / 60)} min
+                  </span>
+                </span>
+              </ListRow>
+            ))}
+          </List>
+        )}
+      </Section>
+    </Page>
   );
 }

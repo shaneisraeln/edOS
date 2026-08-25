@@ -4,6 +4,8 @@ import { Repository } from 'typeorm';
 import { NotificationEntity } from '../../entities/notification.entity';
 import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { LearningSessionEntity } from '../../entities/learning-session.entity';
+import { MasteryService } from '../scoring/mastery.service';
+import { MASTERY } from '../scoring/scoring.constants';
 
 @Injectable()
 export class NotificationsService {
@@ -14,6 +16,7 @@ export class NotificationsService {
     private readonly nodeRepo: Repository<KnowledgeNodeEntity>,
     @InjectRepository(LearningSessionEntity)
     private readonly sessionRepo: Repository<LearningSessionEntity>,
+    private readonly mastery: MasteryService,
   ) {}
 
   async getNotifications(userId: string, status?: string) {
@@ -47,32 +50,34 @@ export class NotificationsService {
    * Generate revision reminders based on spaced repetition schedule.
    */
   async generateRevisionReminders(userId: string) {
-    const nodes = await this.nodeRepo.find({ where: { userId }, relations: ['concept'] });
-    const now = new Date();
+    // Uses the one scheduled review time MasteryService maintains. This method
+    // previously derived its own thresholds (14/7/3 days by mastery band), which
+    // disagreed with the spaced-repetition schedule shown on the dashboard, so a
+    // concept could be "due" in one place and not the other.
+    const due = await this.mastery.getDueNodes(userId, 20);
+    const now = Date.now();
     let created = 0;
 
-    for (const node of nodes) {
-      if (!node.lastRevision || node.mastery >= 90) continue;
+    for (const node of due) {
+      if (node.mastery >= MASTERY.MASTERED) continue;
 
-      const daysSince = Math.floor((now.getTime() - new Date(node.lastRevision).getTime()) / (1000 * 60 * 60 * 24));
-      const threshold = node.mastery >= 70 ? 14 : node.mastery >= 40 ? 7 : 3;
+      const existing = await this.notifRepo.findOne({
+        where: { userId, type: 'revision', status: 'unread' },
+      });
+      if (existing) break;
 
-      if (daysSince >= threshold) {
-        // Check if we already sent a reminder recently
-        const existing = await this.notifRepo.findOne({
-          where: { userId, type: 'revision', status: 'unread' },
-        });
-        if (!existing) {
-          await this.create(
-            userId,
-            `You haven't revised "${node.concept?.name}" in ${daysSince} days.`,
-            'revision',
-            daysSince > threshold * 2 ? 'high' : 'normal',
-            { conceptId: node.conceptId, daysSince },
-          );
-          created++;
-        }
-      }
+      const overdueDays = node.nextReviewAt
+        ? Math.floor((now - new Date(node.nextReviewAt).getTime()) / (1000 * 60 * 60 * 24))
+        : 0;
+
+      await this.create(
+        userId,
+        `"${node.concept?.name}" is due for review.`,
+        'revision',
+        overdueDays > (node.intervalDays || 1) ? 'high' : 'normal',
+        { conceptId: node.conceptId, overdueDays },
+      );
+      created++;
     }
 
     // Streak check
@@ -81,7 +86,7 @@ export class NotificationsService {
       order: { startTime: 'DESC' },
     });
     if (lastSession) {
-      const daysSinceSession = Math.floor((now.getTime() - new Date(lastSession.startTime).getTime()) / (1000 * 60 * 60 * 24));
+      const daysSinceSession = Math.floor((now - new Date(lastSession.startTime).getTime()) / (1000 * 60 * 60 * 24));
       if (daysSinceSession >= 2) {
         await this.create(userId, `You haven't learned in ${daysSinceSession} days. Keep your streak alive!`, 'streak', 'high');
         created++;

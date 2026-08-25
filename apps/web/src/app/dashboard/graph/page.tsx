@@ -1,8 +1,22 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
+import {
+  Badge,
+  ButtonLink,
+  Card,
+  EmptyState,
+  List,
+  ListRow,
+  MasteryBadge,
+  Page,
+  PageHeader,
+  PageLoading,
+  ProgressBar,
+  Section,
+  Segmented,
+} from '@/components/ui';
 
 interface KnowledgeNode {
   id: string;
@@ -15,257 +29,203 @@ interface KnowledgeNode {
   concept: { id: string; name: string; description?: string; parentConceptId?: string };
 }
 
-interface KnowledgeEdge {
-  id: string;
-  parentConceptId: string;
-  childConceptId: string;
-  relationshipType: string;
-  strength: number;
-}
+type SortKey = 'weakest' | 'strongest' | 'practiced';
 
 export default function KnowledgeGraphPage() {
-  const router = useRouter();
   const [nodes, setNodes] = useState<KnowledgeNode[]>([]);
-  const [edges, setEdges] = useState<KnowledgeEdge[]>([]);
   const [concepts, setConcepts] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedNode, setSelectedNode] = useState<KnowledgeNode | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('weakest');
 
   useEffect(() => {
-    loadGraph();
+    Promise.all([api.getGraph(), api.getConcepts()])
+      .then(([graph, conceptList]) => {
+        setNodes(graph.nodes || []);
+        setConcepts(conceptList || []);
+      })
+      .catch(() => {
+        setNodes([]);
+        setConcepts([]);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const loadGraph = async () => {
-    try {
-      const [graphData, conceptsData] = await Promise.all([
-        api.getGraph(),
-        api.getConcepts(),
-      ]);
-      setNodes(graphData.nodes || []);
-      setEdges(graphData.edges || []);
-      setConcepts(conceptsData || []);
-    } catch (err) {
-      console.error('Failed to load graph:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const sorted = useMemo(() => {
+    const copy = [...nodes];
+    if (sort === 'weakest') return copy.sort((a, b) => a.mastery - b.mastery);
+    if (sort === 'strongest') return copy.sort((a, b) => b.mastery - a.mastery);
+    return copy.sort((a, b) => b.practiceCount - a.practiceCount);
+  }, [nodes, sort]);
 
-  const getMasteryColor = (mastery: number) => {
-    if (mastery >= 80) return 'bg-green-500';
-    if (mastery >= 60) return 'bg-blue-500';
-    if (mastery >= 40) return 'bg-yellow-500';
-    if (mastery >= 20) return 'bg-orange-500';
-    return 'bg-gray-300 dark:bg-gray-600';
-  };
+  const summary = useMemo(() => {
+    if (nodes.length === 0) return null;
+    const avg = Math.round(nodes.reduce((s, n) => s + n.mastery, 0) / nodes.length);
+    const weakest = [...nodes].sort((a, b) => a.mastery - b.mastery)[0];
+    const strong = nodes.filter((n) => n.mastery >= 80).length;
+    return { avg, weakest, strong };
+  }, [nodes]);
 
-  const getMasteryLabel = (mastery: number) => {
-    if (mastery >= 80) return 'Strong';
-    if (mastery >= 60) return 'Good';
-    if (mastery >= 40) return 'Developing';
-    if (mastery >= 20) return 'Weak';
-    return 'Not started';
-  };
+  if (loading) return <PageLoading />;
 
-  // Group concepts by curriculum for display
-  const topLevelConcepts = concepts.filter((c: any) => !c.parentConceptId);
-  const getNodeForConcept = (conceptId: string) => nodes.find((n) => n.conceptId === conceptId);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-gray-500">Loading knowledge graph...</p>
-      </div>
-    );
-  }
+  const selected = nodes.find((n) => n.id === selectedId);
+  const untracked = concepts.filter(
+    (c: any) => !c.parentConceptId && !nodes.some((n) => n.conceptId === c.id),
+  );
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Knowledge Graph</h2>
-          <span className="text-sm text-gray-400">{nodes.length} concepts tracked</span>
-        </div>
+    <Page width="wide">
+      <PageHeader
+        title="Knowledge graph"
+        description="Every concept edOS has evidence for, and how well you know it."
+      />
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Graph Overview */}
-        <div className="lg:col-span-2 space-y-6">
-          {nodes.length === 0 ? (
-            <div className="card text-center py-12 space-y-4">
-              <span className="text-4xl">📊</span>
-              <h2 className="text-lg font-semibold">Your knowledge graph is empty</h2>
-              <p className="text-sm text-gray-500">
-                Complete assessments to start building your knowledge map.
-                Each topic you're tested on becomes a node in your graph.
-              </p>
-              <button
-                onClick={() => router.push('/dashboard/assessment')}
-                className="btn-primary"
-              >
-                Take Your First Assessment
-              </button>
+      {nodes.length === 0 ? (
+        <EmptyState
+          icon="graph"
+          title="Nothing tracked yet"
+          description="Concepts appear here once you take an assessment or the agents observe you studying something."
+          action={
+            <ButtonLink href="/dashboard/assessment" variant="primary">
+              Take an assessment
+            </ButtonLink>
+          }
+        />
+      ) : (
+        <>
+          {summary && (
+            <div className="grid grid-cols-3 gap-3">
+              <Card className="p-4">
+                <p className="text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">
+                  {nodes.length}
+                </p>
+                <p className="mt-0.5 text-2xs text-gray-500 dark:text-gray-400">Concepts tracked</p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">
+                  {summary.avg}%
+                </p>
+                <p className="mt-0.5 text-2xs text-gray-500 dark:text-gray-400">Average mastery</p>
+              </Card>
+              <Card className="p-4">
+                <p className="text-xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">
+                  {summary.strong}
+                </p>
+                <p className="mt-0.5 text-2xs text-gray-500 dark:text-gray-400">Mastered</p>
+              </Card>
             </div>
-          ) : (
-            <>
-              {/* Legend */}
-              <div className="card">
-                <div className="flex items-center gap-4 text-xs">
-                  <span className="font-medium text-gray-500">Mastery:</span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-green-500" /> Strong (80%+)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-blue-500" /> Good (60-79%)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-yellow-500" /> Developing (40-59%)
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-3 h-3 rounded-full bg-orange-500" /> Weak (&lt;40%)
-                  </span>
-                </div>
+          )}
+
+          <div className="grid gap-5 lg:grid-cols-5">
+            <div className="space-y-2.5 lg:col-span-3">
+              <div className="flex items-baseline justify-between gap-3">
+                <h2 className="text-sm font-medium text-gray-900 dark:text-gray-100">Concepts</h2>
+                <Segmented
+                  aria-label="Sort concepts"
+                  value={sort}
+                  onChange={setSort}
+                  options={[
+                    { value: 'weakest', label: 'Weakest' },
+                    { value: 'strongest', label: 'Strongest' },
+                    { value: 'practiced', label: 'Most practised' },
+                  ]}
+                />
               </div>
 
-              {/* Concept Tree */}
-              <div className="space-y-3">
-                {nodes.map((node) => (
-                  <button
+              <List>
+                {sorted.map((node) => (
+                  <ListRow
                     key={node.id}
-                    onClick={() => setSelectedNode(node)}
-                    className={`card w-full text-left transition-all hover:ring-1 hover:ring-primary-300 ${
-                      selectedNode?.id === node.id ? 'ring-2 ring-primary-500' : ''
-                    }`}
+                    onClick={() => setSelectedId(node.id)}
+                    className={selectedId === node.id ? 'bg-gray-50 dark:bg-dark-tertiary' : undefined}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${getMasteryColor(node.mastery)}`} />
-                        <div>
-                          <p className="font-medium text-sm">{node.concept?.name || 'Unknown'}</p>
-                          <p className="text-xs text-gray-400">
-                            Practiced {node.practiceCount}x • {getMasteryLabel(node.mastery)}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-lg font-bold text-primary-600">{Math.round(node.mastery)}%</p>
-                        <p className="text-xs text-gray-400">mastery</p>
-                      </div>
-                    </div>
-                    {/* Mastery bar */}
-                    <div className="mt-3 h-1.5 rounded-full bg-gray-100 dark:bg-dark-tertiary overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${getMasteryColor(node.mastery)}`}
-                        style={{ width: `${node.mastery}%` }}
-                      />
-                    </div>
-                  </button>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm text-gray-900 dark:text-gray-100">
+                        {node.concept?.name || 'Unknown concept'}
+                      </span>
+                      <span className="mt-1.5 block">
+                        <ProgressBar value={node.mastery} label={`${node.concept?.name} mastery`} />
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-sm font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                      {Math.round(node.mastery)}%
+                    </span>
+                  </ListRow>
                 ))}
-              </div>
-            </>
-          )}
-
-          {/* Available Concepts (not yet tracked) */}
-          {topLevelConcepts.length > 0 && (
-            <div className="card">
-              <h3 className="text-sm font-medium text-gray-500 mb-3">Available Curricula</h3>
-              <div className="flex flex-wrap gap-2">
-                {topLevelConcepts.map((c: any) => {
-                  const tracked = nodes.some((n) => n.conceptId === c.id);
-                  return (
-                    <span
-                      key={c.id}
-                      className={`px-3 py-1.5 rounded-full text-xs font-medium ${
-                        tracked
-                          ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
-                          : 'bg-gray-100 text-gray-500 dark:bg-dark-tertiary'
-                      }`}
-                    >
-                      {c.name}
-                    </span>
-                  );
-                })}
-              </div>
+              </List>
             </div>
-          )}
-        </div>
 
-        {/* Detail Panel */}
-        <div className="space-y-4">
-          {selectedNode ? (
-            <div className="card space-y-4 sticky top-6">
-              <h3 className="font-semibold">{selectedNode.concept?.name}</h3>
+            <div className="space-y-5 lg:col-span-2">
+              <div className="lg:sticky lg:top-6 lg:space-y-5">
+                {selected ? (
+                  <Card className="space-y-4">
+                    <div>
+                      <h2 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                        {selected.concept?.name}
+                      </h2>
+                      <div className="mt-1.5">
+                        <MasteryBadge mastery={selected.mastery} />
+                      </div>
+                    </div>
 
-              <div className="space-y-3">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Mastery</span>
-                  <span className="font-medium">{Math.round(selectedNode.mastery)}%</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Confidence</span>
-                  <span className="font-medium">{Math.round(selectedNode.confidence)}%</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Weakness</span>
-                  <span className="font-medium text-orange-500">{Math.round(selectedNode.weaknessScore)}%</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Practice Count</span>
-                  <span className="font-medium">{selectedNode.practiceCount}</span>
-                </div>
-                {selectedNode.lastRevision && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Last Revised</span>
-                    <span className="font-medium">
-                      {new Date(selectedNode.lastRevision).toLocaleDateString()}
-                    </span>
-                  </div>
+                    {selected.concept?.description && (
+                      <p className="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+                        {selected.concept.description}
+                      </p>
+                    )}
+
+                    <dl className="space-y-2 text-xs">
+                      <Row label="Mastery" value={`${Math.round(selected.mastery)}%`} />
+                      <Row label="Confidence" value={`${Math.round(selected.confidence)}%`} />
+                      <Row label="Times practised" value={String(selected.practiceCount)} />
+                      <Row
+                        label="Last reviewed"
+                        value={
+                          selected.lastRevision
+                            ? new Date(selected.lastRevision).toLocaleDateString()
+                            : 'Never'
+                        }
+                      />
+                    </dl>
+
+                    <ButtonLink href="/dashboard/assessment" variant="primary" block size="sm">
+                      Practise this
+                    </ButtonLink>
+                  </Card>
+                ) : (
+                  <Card className="py-10 text-center">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Select a concept to see the detail.
+                    </p>
+                  </Card>
                 )}
-              </div>
 
-              <button
-                onClick={() => {
-                  router.push('/dashboard/assessment');
-                }}
-                className="btn-primary w-full text-sm"
-              >
-                Practice This Topic
-              </button>
-            </div>
-          ) : (
-            <div className="card text-center py-8 space-y-2">
-              <p className="text-sm text-gray-400">Select a concept to view details</p>
-            </div>
-          )}
-
-          {/* Summary Stats */}
-          <div className="card space-y-3">
-            <h3 className="text-sm font-medium text-gray-500">Summary</h3>
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Concepts Tracked</span>
-                <span className="font-medium">{nodes.length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Average Mastery</span>
-                <span className="font-medium">
-                  {nodes.length > 0
-                    ? Math.round(nodes.reduce((s, n) => s + n.mastery, 0) / nodes.length)
-                    : 0}%
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Weakest Area</span>
-                <span className="font-medium text-orange-500">
-                  {nodes.length > 0
-                    ? nodes.sort((a, b) => b.weaknessScore - a.weaknessScore)[0]?.concept?.name || '—'
-                    : '—'}
-                </span>
+                {untracked.length > 0 && (
+                  <Section
+                    title="Not started"
+                    description="Curricula available to pick up."
+                  >
+                    <div className="flex flex-wrap gap-1.5">
+                      {untracked.slice(0, 12).map((c: any) => (
+                        <Badge key={c.id}>{c.name}</Badge>
+                      ))}
+                    </div>
+                  </Section>
+                )}
               </div>
             </div>
           </div>
-        </div>
-      </div>
-      </div>
+        </>
+      )}
+    </Page>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-gray-500 dark:text-gray-400">{label}</dt>
+      <dd className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{value}</dd>
     </div>
   );
 }

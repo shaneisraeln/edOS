@@ -3,8 +3,15 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AssessmentEntity } from '../../entities/assessment.entity';
 import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
-import { ConceptEntity } from '../../entities/concept.entity';
 import { AIService } from '../ai/ai.service';
+import {
+  AnswerGraderService,
+  stripAnswerKey,
+} from '../scoring/answer-grader.service';
+import { MasteryService } from '../scoring/mastery.service';
+import { ConceptResolverService } from '../scoring/concept-resolver.service';
+import { MASTERY, DEFAULT_QUESTION_POINTS } from '../scoring/scoring.constants';
+import { StoredQuestion } from '../scoring/scoring.types';
 
 @Injectable()
 export class AssessmentService {
@@ -13,16 +20,16 @@ export class AssessmentService {
     private readonly assessmentRepo: Repository<AssessmentEntity>,
     @InjectRepository(KnowledgeNodeEntity)
     private readonly nodeRepo: Repository<KnowledgeNodeEntity>,
-    @InjectRepository(ConceptEntity)
-    private readonly conceptRepo: Repository<ConceptEntity>,
     private readonly aiService: AIService,
+    private readonly grader: AnswerGraderService,
+    private readonly mastery: MasteryService,
+    private readonly concepts: ConceptResolverService,
   ) {}
 
   async generate(
     userId: string,
     data: { topic: string; subtopic?: string; difficulty?: string; type?: string; questionCount?: number },
   ) {
-    // Fetch user's weak and strong concepts for contextual generation
     const weakNodes = await this.nodeRepo.find({
       where: { userId },
       relations: ['concept'],
@@ -37,11 +44,11 @@ export class AssessmentService {
     });
 
     const weakConcepts = weakNodes
-      .filter((n) => n.weaknessScore > 50)
+      .filter((n) => n.mastery < MASTERY.WEAK)
       .map((n) => n.concept?.name)
       .filter(Boolean) as string[];
     const strongConcepts = strongNodes
-      .filter((n) => n.mastery > 70)
+      .filter((n) => n.mastery >= MASTERY.STRONG)
       .map((n) => n.concept?.name)
       .filter(Boolean) as string[];
 
@@ -55,94 +62,98 @@ export class AssessmentService {
       strongConcepts,
     });
 
-    const assessment = this.assessmentRepo.create({
-      userId,
-      topic: data.topic,
-      subtopic: data.subtopic,
-      difficulty: data.difficulty || 'intermediate',
-      type: data.type || 'mcq',
-      questions,
-      maxScore: questions.length * 20,
-      status: 'pending',
-    });
+    const assessment = await this.assessmentRepo.save(
+      this.assessmentRepo.create({
+        userId,
+        topic: data.topic,
+        subtopic: data.subtopic,
+        difficulty: data.difficulty || 'intermediate',
+        type: data.type || 'mcq',
+        questions,
+        maxScore: this.declaredMax(questions as StoredQuestion[]),
+        status: 'pending',
+      }),
+    );
 
-    return this.assessmentRepo.save(assessment);
+    // Answer keys stay on the server.
+    return this.forClient(assessment);
   }
 
-  async submit(userId: string, assessmentId: string, answers: { questionId: string; answer: string }[]) {
+  async submit(
+    userId: string,
+    assessmentId: string,
+    answers: { questionId: string; answer: string }[],
+  ) {
     const assessment = await this.assessmentRepo.findOne({
       where: { id: assessmentId, userId },
     });
     if (!assessment) throw new NotFoundException('Assessment not found');
 
-    // Score answers using AI
-    const scoringResult = await this.aiService.scoreAssessment({
-      questions: assessment.questions,
+    const questions = (assessment.questions || []) as StoredQuestion[];
+
+    const result = await this.grader.grade({
+      questions,
       answers,
       topic: assessment.topic,
     });
 
-    assessment.score = scoringResult.totalScore;
+    assessment.score = result.totalScore;
+    assessment.maxScore = result.gradableMaxScore || result.declaredMaxScore;
     assessment.status = 'completed';
     assessment.completedAt = new Date();
-    assessment.feedback = scoringResult.feedback;
-    assessment.questions = scoringResult.scoredQuestions;
+    assessment.feedback = result.feedback;
+
+    // Merge the grade onto each question instead of replacing the array. The
+    // previous implementation assigned the grader's output directly, so a
+    // grader that returned nothing wiped the questions permanently.
+    const gradeById = new Map(result.questions.map((q) => [q.questionId, q]));
+    assessment.questions = questions.map((q) => {
+      const grade = gradeById.get(q.id);
+      if (!grade) return q;
+
+      return {
+        ...q,
+        score: grade.score,
+        feedback: grade.feedback,
+        correct: grade.correct,
+        // Carried through so a client can distinguish a deterministic mark from
+        // a model judgement, and above all show an unscored question as
+        // unscored rather than as a silent zero.
+        gradeMethod: grade.method,
+      };
+    });
 
     const saved = await this.assessmentRepo.save(assessment);
 
-    // Update knowledge graph based on assessment result
-    await this.updateKnowledgeGraph(userId, assessment.topic, scoringResult.totalScore, assessment.maxScore);
-
-    return saved;
-  }
-
-  private async updateKnowledgeGraph(userId: string, topic: string, score: number, maxScore: number) {
-    // Find the concept matching this topic
-    const concept = await this.conceptRepo.findOne({
-      where: { name: topic },
-    });
-
-    if (!concept) return;
-
-    const scorePercent = maxScore > 0 ? (score / maxScore) * 100 : 0;
-
-    // Find or create the knowledge node
-    let node = await this.nodeRepo.findOne({
-      where: { userId, conceptId: concept.id },
-    });
-
-    if (!node) {
-      node = this.nodeRepo.create({
-        userId,
-        conceptId: concept.id,
-        confidence: scorePercent,
-        mastery: scorePercent,
-        assessmentScore: scorePercent,
-        weaknessScore: Math.max(0, 100 - scorePercent),
-        practiceCount: 1,
-        lastRevision: new Date(),
-        revisionCount: 1,
-      });
-    } else {
-      // Weighted update: blend old mastery with new score (70% new, 30% history)
-      node.mastery = Math.round(node.mastery * 0.3 + scorePercent * 0.7);
-      node.confidence = Math.round(node.confidence * 0.3 + scorePercent * 0.7);
-      node.assessmentScore = scorePercent;
-      node.weaknessScore = Math.max(0, 100 - node.mastery);
-      node.practiceCount += 1;
-      node.lastRevision = new Date();
-      node.revisionCount += 1;
+    // Only record evidence when something was actually gradable.
+    if (result.percentage !== null) {
+      const concept = await this.concepts.resolve(assessment.topic);
+      if (concept) {
+        await this.mastery.recordEvidence({
+          userId,
+          conceptId: concept.id,
+          kind: 'assessment',
+          scoreFraction: result.percentage / 100,
+          difficulty: assessment.difficulty,
+          isReview: true,
+        });
+      }
     }
 
-    await this.nodeRepo.save(node);
+    return {
+      ...this.forClient(saved),
+      percentage: result.percentage,
+      degraded: result.degraded,
+    };
   }
 
   async getHistory(userId: string, limit = 20) {
-    return this.assessmentRepo.find({
+    const rows = await this.assessmentRepo.find({
       where: { userId },
       order: { generatedAt: 'DESC' },
       take: limit,
     });
+    return rows.map((row) => this.forClient(row));
   }
 
   async getById(userId: string, assessmentId: string) {
@@ -150,6 +161,22 @@ export class AssessmentService {
       where: { id: assessmentId, userId },
     });
     if (!assessment) throw new NotFoundException('Assessment not found');
-    return assessment;
+    return this.forClient(assessment);
+  }
+
+  /** Never let answer keys or expected key points reach the client. */
+  private forClient(assessment: AssessmentEntity): AssessmentEntity {
+    return {
+      ...assessment,
+      questions: stripAnswerKey((assessment.questions || []) as Record<string, unknown>[]),
+    } as AssessmentEntity;
+  }
+
+  private declaredMax(questions: StoredQuestion[]): number {
+    if (!questions?.length) return 0;
+    return questions.reduce((sum, q) => {
+      const points = Number(q?.maxScore);
+      return sum + (Number.isFinite(points) && points > 0 ? points : DEFAULT_QUESTION_POINTS);
+    }, 0);
   }
 }

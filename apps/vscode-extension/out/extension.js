@@ -37,8 +37,21 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const API_BASE = () => vscode.workspace.getConfiguration('edos').get('apiUrl') || 'http://localhost:3001/api';
+/** This extension's surface identity in the shared session. */
+const SURFACE = 'ide';
+/**
+ * How often to check in with the server. Deliberately well below the server's
+ * knowledge-check interval so a due check is picked up promptly.
+ */
+const PULSE_INTERVAL_MS = 10_000;
+/** Flush queued events every third pulse, so batching still happens. */
+const FLUSH_EVERY_N_TICKS = 3;
 let accessToken;
 let sessionId;
+/** The shared session, as last reported by the API. Null when none is running. */
+let activeSession = null;
+/** Session we already reported as ended, so the notice appears exactly once. */
+let lastWrapUpSessionId;
 let eventQueue = [];
 let syncInterval;
 let statusBarItem;
@@ -77,43 +90,54 @@ function activate(context) {
     // because the listeners would never have been attached.
     // Track file opens
     context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
-        if (!trackingEnabled || !editor)
+        if (!shouldCapture() || !editor)
             return;
         handleFileSwitch(editor.document);
     }));
     // Track file saves
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((doc) => {
-        if (!trackingEnabled)
+        if (!shouldCapture())
             return;
         trackFileSave(doc);
     }));
     // Track diagnostics changes (errors fixed)
     context.subscriptions.push(vscode.languages.onDidChangeDiagnostics((e) => {
-        if (!trackingEnabled)
+        if (!shouldCapture())
             return;
         trackDiagnostics(e);
     }));
     // Track terminal commands (builds)
     context.subscriptions.push(vscode.window.onDidOpenTerminal(() => {
-        if (!trackingEnabled)
+        if (!shouldCapture())
             return;
         buildCount++;
         queueEvent('BuildTriggered', { buildCount });
     }));
     // Track typing activity for idle detection
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(() => {
-        if (!trackingEnabled)
+        if (!shouldCapture())
             return;
         lastActiveTime = Date.now();
         resetIdleTimer();
     }));
-    // Start sync loop
-    syncInterval = setInterval(syncEvents, 30000);
-    // Start coding timer
+    // The pulse has to run well inside the server's check interval, otherwise a
+    // check comes due and then waits for the next tick. Event flushing stays on
+    // the slower cadence because batching is the point.
+    let ticksSinceFlush = 0;
+    syncInterval = setInterval(async () => {
+        await syncSession();
+        ticksSinceFlush += 1;
+        if (ticksSinceFlush >= FLUSH_EVERY_N_TICKS) {
+            ticksSinceFlush = 0;
+            if (shouldCapture())
+                await syncEvents();
+        }
+    }, PULSE_INTERVAL_MS);
     codingStartTime = Date.now();
-    // Auto-start session if logged in
+    // Attach to a session that may already be running elsewhere. This replaces
+    // the old auto-start, which minted a fresh session on every window open.
     if (accessToken) {
-        startSession();
+        syncSession();
     }
 }
 function deactivate() {
@@ -143,7 +167,8 @@ function resetIdleTimer() {
     }, IDLE_THRESHOLD_MS);
 }
 async function triggerQuiz() {
-    if (!accessToken)
+    // Only quiz on work that belongs to a real session.
+    if (!shouldCapture())
         return;
     const project = vscode.workspace.name || 'Unknown Project';
     const language = vscode.window.activeTextEditor?.document.languageId || 'unknown';
@@ -305,7 +330,9 @@ window.addEventListener('message', e => {
   if (msg.type === 'result') {
     document.getElementById('quizView').style.display = 'none';
     document.getElementById('result').style.display = 'block';
-    document.getElementById('scoreVal').textContent = Math.round(msg.percentage || 0) + '%';
+    // Pre-formatted by the extension: a check reports marks, a quiz reports a
+    // percentage, and an ungradable answer reports neither.
+    document.getElementById('scoreVal').textContent = msg.scoreLabel || '—';
     document.getElementById('fbVal').textContent = msg.feedback || 'Answers recorded.';
   }
   if (msg.type === 'error') {
@@ -316,23 +343,62 @@ window.addEventListener('message', e => {
   }
 });
 </script></body></html>`;
-    // Handle messages from webview
+    // A recurring session check and a context quiz are graded by different
+    // endpoints with different payloads, so the panel remembers which it is.
+    const isCheck = quiz.kind === 'session-check';
     panel.webview.onDidReceiveMessage(async (msg) => {
         if (msg.type === 'submit') {
             try {
-                const res = await fetch(`${API_BASE()}/context-quiz/submit`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-                    body: JSON.stringify({ quizId: msg.quizId, answers: msg.answers }),
-                });
+                const res = isCheck
+                    ? await fetch(`${API_BASE()}/session/check/answer`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${accessToken}`,
+                        },
+                        body: JSON.stringify({
+                            checkId: quiz.id,
+                            answer: msg.answers?.[0]?.answer ?? '',
+                            sessionId: quiz.sessionId,
+                        }),
+                    })
+                    : await fetch(`${API_BASE()}/context-quiz/submit`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${accessToken}`,
+                        },
+                        body: JSON.stringify({ quizId: msg.quizId, answers: msg.answers }),
+                    });
                 if (!res.ok)
                     throw new Error(`HTTP ${res.status}`);
                 const result = await res.json();
-                panel.webview.postMessage({
-                    type: 'result',
-                    percentage: result.percentage || 0,
-                    feedback: result.feedback || '',
-                });
+                if (isCheck) {
+                    // A single check is marked out of the question's points, and
+                    // correct === null means grading was unavailable, never "wrong".
+                    panel.webview.postMessage({
+                        type: 'result',
+                        scoreLabel: result.score === null || result.score === undefined
+                            ? '—'
+                            : `${result.score}/${result.maxScore}`,
+                        feedback: result.correct === null
+                            ? 'This one could not be scored, so nothing was recorded.'
+                            : result.feedback || (result.correct ? 'That holds up.' : 'Not quite.'),
+                    });
+                }
+                else {
+                    // percentage is null when nothing was gradable; showing 0% would read
+                    // as a failed answer rather than a failed grader.
+                    panel.webview.postMessage({
+                        type: 'result',
+                        scoreLabel: typeof result.percentage === 'number'
+                            ? `${Math.round(result.percentage)}%`
+                            : '—',
+                        feedback: typeof result.percentage === 'number'
+                            ? result.feedback || 'Answers recorded.'
+                            : 'This one could not be scored, so nothing was recorded.',
+                    });
+                }
             }
             catch (err) {
                 // Report the failure so the user can retry, rather than showing a
@@ -344,13 +410,38 @@ window.addEventListener('message', e => {
             }
         }
         if (msg.type === 'skip') {
-            fetch(`${API_BASE()}/context-quiz/skip`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-                body: JSON.stringify({ quizId: msg.quizId }),
-            }).catch(() => { });
+            const headers = {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${accessToken}`,
+            };
+            (isCheck
+                ? fetch(`${API_BASE()}/session/check/skip`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ checkId: quiz.id, sessionId: quiz.sessionId }),
+                })
+                : fetch(`${API_BASE()}/context-quiz/skip`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ quizId: msg.quizId }),
+                })).catch(() => { });
             panel.dispose();
         }
+    });
+}
+/**
+ * Present a recurring knowledge check in the editor.
+ *
+ * Reuses the quiz webview so there is one panel implementation, with `kind`
+ * telling it which endpoints to submit to.
+ */
+function showCheckPanel(check) {
+    showQuizPanel({
+        kind: 'session-check',
+        id: check.id,
+        sessionId: check.sessionId,
+        topic: check.topic || activeSession?.topic || 'Knowledge check',
+        questions: [{ id: check.id, text: check.question }],
     });
 }
 // --- Tracking ---
@@ -400,13 +491,14 @@ function trackDiagnostics(e) {
     }
 }
 function queueEvent(eventType, metadata) {
-    if (!accessToken || !trackingEnabled)
+    if (!shouldCapture())
         return;
     eventQueue.push({
         eventType,
-        source: 'ide',
+        source: SURFACE,
         timestamp: new Date().toISOString(),
         topic: detectTopic(metadata),
+        // The shared session id, not one this extension invented.
         sessionId,
         metadata,
     });
@@ -433,6 +525,11 @@ function detectTopic(metadata) {
     return metadata.project || 'Coding';
 }
 // --- Status Bar ---
+/**
+ * The status bar distinguishes the three reasons nothing is being captured:
+ * not signed in, paused locally, or no session running. Previously it claimed
+ * "Tracking active" whenever the toggle was on, even with nothing recording.
+ */
 function updateStatusBar() {
     if (!accessToken) {
         statusBarItem.text = '$(circle-slash) edOS: Sign in';
@@ -441,46 +538,146 @@ function updateStatusBar() {
     }
     if (!trackingEnabled) {
         statusBarItem.text = '$(debug-pause) edOS: Paused';
-        statusBarItem.tooltip = 'Click to resume tracking';
+        statusBarItem.tooltip = 'Tracking paused in this editor. Click to resume.';
         return;
     }
-    const queueSize = eventQueue.length;
-    statusBarItem.text = `$(eye) edOS: ${queueSize} events`;
-    statusBarItem.tooltip = `Tracking active · ${filesEdited.size} files edited · Click to pause`;
+    if (!activeSession || activeSession.status !== 'active') {
+        statusBarItem.text = '$(circle-outline) edOS: No session';
+        statusBarItem.tooltip =
+            'No learning session running. Start one from the editor, the web app, or the desktop agent.';
+        return;
+    }
+    if (!shouldCapture()) {
+        statusBarItem.text = '$(circle-slash) edOS: Not capturing';
+        statusBarItem.tooltip =
+            'A session is running but editor tracking is disabled in your edOS settings.';
+        return;
+    }
+    statusBarItem.text = `$(eye) edOS: ${eventQueue.length} events`;
+    statusBarItem.tooltip = `Capturing "${activeSession.topic}" · ${filesEdited.size} files edited · Click to pause`;
 }
 // --- Session Management ---
+/**
+ * Start a shared session from the editor.
+ *
+ * Idempotent server-side: if the learner already has a session running (started
+ * on the web, the desktop agent or the browser), this joins it rather than
+ * creating a second one. The extension used to POST /learning/start on every
+ * activation, which is how three concurrent "active" sessions appeared.
+ */
 async function startSession() {
     if (!accessToken)
         return;
     try {
-        const topic = vscode.workspace.name || 'Coding Session';
-        const res = await fetch(`${API_BASE()}/learning/start`, {
+        const topic = vscode.workspace.name || 'Coding session';
+        const res = await fetch(`${API_BASE()}/session/start`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-            body: JSON.stringify({ topic }),
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: JSON.stringify({ topic, surface: SURFACE, deviceName: deviceLabel() }),
         });
-        if (res.ok) {
-            const data = await res.json();
-            sessionId = data.id;
-            codingStartTime = Date.now();
-        }
+        if (!res.ok)
+            return;
+        const data = await res.json();
+        applySession(data.session);
+        codingStartTime = Date.now();
     }
-    catch (e) {
-        // Silent
+    catch {
+        // Offline is not an error worth interrupting the editor for.
     }
 }
+/** End the session for every surface, not just this one. */
 async function endSession() {
-    if (!accessToken || !sessionId)
+    if (!accessToken)
         return;
     try {
-        await fetch(`${API_BASE()}/learning/end`, {
+        await fetch(`${API_BASE()}/session/end`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
-            body: JSON.stringify({ sessionId }),
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: '{}',
         });
     }
-    catch { }
-    sessionId = undefined;
+    catch {
+        // ignore
+    }
+    applySession(null);
+}
+/**
+ * Attach to whatever session is running, or detach if none is.
+ *
+ * Runs on the existing sync tick, which makes the extension self-healing: a
+ * session started on another surface is picked up within one tick without the
+ * user touching the editor.
+ */
+async function syncSession() {
+    if (!accessToken) {
+        applySession(null);
+        return;
+    }
+    try {
+        const body = {
+            surface: SURFACE,
+            deviceName: deviceLabel(),
+        };
+        // Saying which session we think we are in is what lets the server reply
+        // "that one ended" rather than just returning nothing.
+        if (activeSession?.id)
+            body.knownSessionId = activeSession.id;
+        const res = await fetch(`${API_BASE()}/session/pulse`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok)
+            return;
+        const data = (await res.json());
+        applySession(data.session ?? null);
+        // A check assigned to this surface. The server owns the schedule, so the
+        // learner is asked once per interval across every surface rather than once
+        // per surface on four different clocks.
+        if (data.check)
+            showCheckPanel(data.check);
+        if (data.endedSession)
+            reportSessionEnded(data.endedSession);
+    }
+    catch {
+        // Keep the last known state rather than flapping capture on and off.
+    }
+}
+/**
+ * Tell the learner the session finished elsewhere.
+ *
+ * The extension previously just stopped capturing, which looks identical to it
+ * having broken. Guarded so a repeated pulse cannot nag.
+ */
+function reportSessionEnded(ended) {
+    if (lastWrapUpSessionId === ended.id)
+        return;
+    lastWrapUpSessionId = ended.id;
+    const minutes = Math.round((ended.elapsedSeconds || 0) / 60);
+    const where = ended.reason === 'abandoned'
+        ? 'closed automatically after a long silence'
+        : 'ended from another device';
+    vscode.window.showInformationMessage(`edOS: "${ended.topic}" was ${where}. ${minutes}m studied, ${ended.checkCount || 0} checks. Tracking has stopped.`);
+}
+function applySession(session) {
+    activeSession = session;
+    sessionId = session?.id;
+    updateStatusBar();
+}
+/**
+ * Capture requires a running session that this surface has joined, plus local
+ * tracking being enabled. Without the session condition the extension recorded
+ * whenever it was installed.
+ */
+function shouldCapture() {
+    if (!trackingEnabled || !accessToken || !activeSession)
+        return false;
+    if (activeSession.status !== 'active')
+        return false;
+    return (activeSession.participants || []).some((p) => p.surface === SURFACE && p.status !== 'left');
+}
+function deviceLabel() {
+    return `${vscode.env.appName}${vscode.workspace.name ? ` — ${vscode.workspace.name}` : ''}`;
 }
 // --- Sync ---
 async function syncEvents() {

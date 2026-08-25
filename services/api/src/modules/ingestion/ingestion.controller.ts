@@ -19,7 +19,9 @@ export class IngestionController {
     @Body() body: { events: IngestEventDto[] },
   ) {
     const result = await this.ingestionService.ingestBatch(req.user.sub, body.events);
-    return { accepted: result.accepted, errors: result.errors };
+    // sessionId is passed through so an agent can confirm what its events were
+    // attributed to, and notice when they were not attributed at all.
+    return { accepted: result.accepted, errors: result.errors, sessionId: result.sessionId };
   }
 
   @Post('session/heartbeat')

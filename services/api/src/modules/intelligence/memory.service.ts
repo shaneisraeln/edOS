@@ -5,18 +5,18 @@ import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { LearningSessionEntity } from '../../entities/learning-session.entity';
 import { AssessmentEntity } from '../../entities/assessment.entity';
 import { LearningEventEntity } from '../../entities/learning-event.entity';
+import { MasteryService } from '../scoring/mastery.service';
+import { MASTERY } from '../scoring/scoring.constants';
 
 /**
- * Memory Engine — manages short, medium, and long-term learner memory.
- * Also implements knowledge decay and spaced repetition scheduling.
+ * Memory Engine — short, medium and long-term views of what a learner knows.
+ *
+ * Decay and scheduling used to live here with their own constants. They now
+ * delegate to MasteryService so there is exactly one forgetting curve and one
+ * review schedule in the system.
  */
 @Injectable()
 export class MemoryService {
-  // Decay rate: lose ~5% confidence per week of inactivity
-  private readonly DECAY_RATE_PER_DAY = 0.007;
-  // Minimum confidence floor
-  private readonly MIN_CONFIDENCE = 5;
-
   constructor(
     @InjectRepository(KnowledgeNodeEntity)
     private readonly nodeRepo: Repository<KnowledgeNodeEntity>,
@@ -26,6 +26,7 @@ export class MemoryService {
     private readonly assessmentRepo: Repository<AssessmentEntity>,
     @InjectRepository(LearningEventEntity)
     private readonly eventRepo: Repository<LearningEventEntity>,
+    private readonly masteryService: MasteryService,
   ) {}
 
   /**
@@ -116,97 +117,48 @@ export class MemoryService {
   }
 
   /**
-   * Apply knowledge decay to all user nodes.
-   * Called periodically or on dashboard load.
+   * Recompute retention-adjusted mastery for a user's concepts.
+   *
+   * Delegates to MasteryService, which owns the forgetting curve. This used to
+   * apply its own decay formula that only touched `confidence` — mastery itself
+   * never decayed, so a concept studied once a year ago still read as mastered.
    */
   async applyDecay(userId: string) {
-    const nodes = await this.nodeRepo.find({ where: { userId } });
-    const now = new Date();
-    let decayed = 0;
-
-    for (const node of nodes) {
-      if (!node.lastRevision) continue;
-
-      const daysSinceRevision = Math.floor(
-        (now.getTime() - new Date(node.lastRevision).getTime()) / (1000 * 60 * 60 * 24),
-      );
-
-      if (daysSinceRevision < 3) continue; // Grace period: no decay within 3 days
-
-      // Exponential decay based on days since last revision
-      const decayFactor = Math.pow(1 - this.DECAY_RATE_PER_DAY, daysSinceRevision - 3);
-      const newConfidence = Math.max(this.MIN_CONFIDENCE, Math.round(node.confidence * decayFactor));
-
-      if (newConfidence < node.confidence) {
-        node.confidence = newConfidence;
-        node.weaknessScore = Math.min(100, 100 - node.mastery + (100 - newConfidence) / 2);
-        await this.nodeRepo.save(node);
-        decayed++;
-      }
-    }
-
-    return { decayed, total: nodes.length };
+    const total = await this.masteryService.refreshRetention(userId);
+    return { decayed: total, total };
   }
 
   /**
-   * Get revision schedule using spaced repetition logic.
-   * Returns concepts due for revision sorted by urgency.
+   * Concepts due for review, most overdue first.
+   *
+   * Reads the per-concept `nextReviewAt` that MasteryService maintains with
+   * SM-2 scheduling, rather than recomputing an interval from mastery and
+   * practice count. That older heuristic ignored whether the learner actually
+   * got the answers right, and disagreed with the schedule the notifications
+   * service used for the same concept.
    */
   async getRevisionSchedule(userId: string, limit = 10) {
-    const nodes = await this.nodeRepo.find({
-      where: { userId },
-      relations: ['concept'],
-    });
+    const due = await this.masteryService.getDueNodes(userId, limit);
+    const now = Date.now();
 
-    const now = new Date();
-    const scored = nodes.map((node) => {
+    return due.map((node) => {
       const daysSinceRevision = node.lastRevision
-        ? Math.floor((now.getTime() - new Date(node.lastRevision).getTime()) / (1000 * 60 * 60 * 24))
-        : 999;
-
-      // Spaced repetition interval based on mastery
-      // Higher mastery = longer interval before revision needed
-      const idealInterval = this.getIdealInterval(node.mastery, node.practiceCount);
-      const overdue = daysSinceRevision - idealInterval;
+        ? Math.floor((now - new Date(node.lastRevision).getTime()) / (1000 * 60 * 60 * 24))
+        : null;
+      const overdueDays = node.nextReviewAt
+        ? Math.max(0, (now - new Date(node.nextReviewAt).getTime()) / (1000 * 60 * 60 * 24))
+        : 0;
+      const interval = node.intervalDays || 1;
 
       return {
-        node,
+        concept: node.concept?.name,
+        conceptId: node.conceptId,
+        mastery: Math.round(node.mastery),
         daysSinceRevision,
-        idealInterval,
-        overdue,
-        urgency: overdue > 0 ? overdue / idealInterval : 0,
+        idealInterval: Math.round(interval),
+        dueAt: node.nextReviewAt,
+        urgency: Math.round((overdueDays / interval) * 100) / 100,
       };
     });
-
-    // Sort by urgency (most overdue first)
-    return scored
-      .filter((s) => s.overdue > 0)
-      .sort((a, b) => b.urgency - a.urgency)
-      .slice(0, limit)
-      .map((s) => ({
-        concept: s.node.concept?.name,
-        conceptId: s.node.conceptId,
-        mastery: s.node.mastery,
-        daysSinceRevision: s.daysSinceRevision,
-        idealInterval: s.idealInterval,
-        urgency: Math.round(s.urgency * 100) / 100,
-      }));
-  }
-
-  /**
-   * Spaced repetition interval calculation.
-   * Based on SuperMemo SM-2 inspired logic.
-   */
-  private getIdealInterval(mastery: number, practiceCount: number): number {
-    if (practiceCount <= 1) return 1;
-    if (practiceCount === 2) return 3;
-
-    // Base interval grows with practice count
-    const baseInterval = Math.pow(2, Math.min(practiceCount - 1, 8));
-
-    // Mastery multiplier: high mastery = longer intervals
-    const masteryMultiplier = 0.5 + (mastery / 100) * 1.5;
-
-    return Math.round(baseInterval * masteryMultiplier);
   }
 }

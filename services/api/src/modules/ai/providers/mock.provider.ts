@@ -140,24 +140,28 @@ export class MockLLMProvider implements LLMProvider {
         text: `In your own words, explain what ${topic} is and why it matters.`,
         type: 'concept_explanation',
         maxScore: 20,
+        expectedKeyPoints: ['defines the concept', 'explains why it is useful'],
       },
       {
         id: 'q2',
         text: `What should you already understand before learning ${topic}?`,
         type: 'concept_explanation',
         maxScore: 20,
+        expectedKeyPoints: ['names at least one prerequisite', 'explains the dependency'],
       },
       {
         id: 'q3',
         text: `Describe a real project where you would apply ${topic}.`,
         type: 'practical_task',
         maxScore: 20,
+        expectedKeyPoints: ['concrete scenario', 'explains the fit'],
       },
       {
         id: 'q4',
         text: `A teammate's ${topic} implementation behaves incorrectly under load. How would you diagnose it?`,
         type: 'debugging',
         maxScore: 20,
+        expectedKeyPoints: ['a diagnostic step', 'reasoning about the failure mode'],
       },
       {
         id: 'q5',
@@ -169,26 +173,80 @@ export class MockLLMProvider implements LLMProvider {
           `${topic} only works in production builds`,
           `${topic} is unrelated to program correctness`,
         ],
+        // Objective questions now ship an answer key so grading is deterministic.
+        correctAnswer: `${topic} trades some performance for clarity`,
         maxScore: 20,
       },
     ];
   }
 
+  /**
+   * Grade open-ended answers per question, matching the contract
+   * AnswerGraderService validates: { questions: [{questionId, score, feedback}], feedback }.
+   *
+   * Offline so it cannot judge correctness; it rewards answers that show real
+   * engagement (length, and hitting any declared key points) which is enough to
+   * exercise the whole pipeline end to end.
+   */
   private assessmentScore(content: string) {
-    // Reward answers with substance so scores vary across runs.
-    const answerText = (/"answer":"([^"]*)"/g.exec(content) || []).join(' ');
-    const density = Math.min(1, (answerText.length || content.length / 8) / 400);
-    const total = Math.round(40 + density * 55);
+    let items: { questionId: string; maxScore?: number; answer?: string; expectedKeyPoints?: string[] }[] = [];
+
+    try {
+      const start = content.indexOf('[');
+      const end = content.lastIndexOf(']');
+      if (start !== -1 && end > start) {
+        items = JSON.parse(content.slice(start, end + 1));
+      }
+    } catch {
+      items = [];
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return { questions: [], feedback: 'Nothing to grade.' };
+    }
+
+    const questions = items.map((item) => {
+      const max = Number.isFinite(Number(item?.maxScore)) && Number(item?.maxScore) > 0
+        ? Number(item.maxScore)
+        : 20;
+      const answer = String(item?.answer ?? '').trim();
+
+      if (!answer) {
+        return { questionId: item.questionId, score: 0, feedback: 'No answer given.' };
+      }
+
+      // Substance proxy: length plus any expected key points actually mentioned.
+      const words = answer.split(/\s+/).length;
+      const lengthScore = Math.min(1, words / 45);
+
+      const points = Array.isArray(item.expectedKeyPoints) ? item.expectedKeyPoints : [];
+      const hit = points.filter((p) =>
+        String(p)
+          .toLowerCase()
+          .split(/\s+/)
+          .some((word) => word.length > 4 && answer.toLowerCase().includes(word)),
+      ).length;
+      const keyPointScore = points.length > 0 ? hit / points.length : lengthScore;
+
+      const fraction = Math.min(1, 0.45 * lengthScore + 0.55 * keyPointScore + 0.15);
+      const score = Math.round(fraction * max);
+
+      return {
+        questionId: item.questionId,
+        score,
+        feedback:
+          fraction >= 0.8
+            ? 'Covers the important points clearly.'
+            : fraction >= 0.5
+              ? 'Broadly right, but thin on specifics.'
+              : 'Too vague to show understanding.',
+      };
+    });
 
     return {
-      totalScore: total,
+      questions,
       feedback:
-        total >= 80
-          ? 'Strong grasp of the fundamentals. Push into edge cases and performance trade-offs next.'
-          : total >= 60
-            ? 'Solid understanding overall. Tighten up the details and revisit the prerequisites.'
-            : 'The core idea is partly there. Review the foundations and try explaining it out loud.',
-      scoredQuestions: [],
+        '(offline grading — set AI_PROVIDER and AI_API_KEY for judged scoring) Answers were assessed on substance and coverage.',
     };
   }
 

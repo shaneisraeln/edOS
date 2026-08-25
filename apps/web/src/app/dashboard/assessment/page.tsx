@@ -3,8 +3,22 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import {
+  Alert,
+  Button,
+  Card,
+  Input,
+  Page,
+  PageHeader,
+  ProgressBar,
+  Section,
+  Segmented,
+  Select,
+  Textarea,
+} from '@/components/ui';
 
 type Phase = 'setup' | 'loading' | 'questions' | 'submitting' | 'results';
+type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 
 interface Question {
   id: string;
@@ -26,7 +40,7 @@ export default function AssessmentPage() {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('setup');
   const [topic, setTopic] = useState('');
-  const [difficulty, setDifficulty] = useState('intermediate');
+  const [difficulty, setDifficulty] = useState<Difficulty>('intermediate');
   const [concepts, setConcepts] = useState<{ id: string; name: string }[]>([]);
   const [assessmentId, setAssessmentId] = useState('');
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -35,17 +49,13 @@ export default function AssessmentPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    loadConcepts();
+    api
+      .getConcepts()
+      .then((data) => setConcepts(data.map((c: any) => ({ id: c.id, name: c.name }))))
+      .catch(() => {
+        // Concept list is a convenience; the user can always type a topic.
+      });
   }, []);
-
-  const loadConcepts = async () => {
-    try {
-      const data = await api.getConcepts();
-      setConcepts(data.map((c: any) => ({ id: c.id, name: c.name })));
-    } catch (e) {
-      // If concepts aren't loaded, user can still type a topic
-    }
-  };
 
   const generateAssessment = async () => {
     if (!topic.trim()) return;
@@ -53,243 +63,205 @@ export default function AssessmentPage() {
     setPhase('loading');
 
     try {
-      const assessment = await api.generateAssessment(topic, {
-        difficulty,
-        questionCount: 5,
-      });
+      const assessment = await api.generateAssessment(topic, { difficulty, questionCount: 5 });
       setAssessmentId(assessment.id);
       setQuestions(assessment.questions || []);
       setAnswers({});
       setPhase('questions');
     } catch (err: any) {
-      setError(err.message || 'Failed to generate assessment');
+      setError(err.message || 'Could not generate the assessment');
       setPhase('setup');
     }
   };
 
   const submitAssessment = async () => {
-    const answerList = questions.map((q) => ({
-      questionId: q.id,
-      answer: answers[q.id] || '',
-    }));
-
     setPhase('submitting');
+    setError('');
 
     try {
-      const res = await api.submitAssessment(assessmentId, answerList);
+      const res = await api.submitAssessment(
+        assessmentId,
+        questions.map((q) => ({ questionId: q.id, answer: answers[q.id] || '' })),
+      );
       setResult(res);
       setPhase('results');
     } catch (err: any) {
-      setError(err.message || 'Failed to submit');
+      setError(err.message || 'Could not submit your answers');
       setPhase('questions');
     }
   };
 
-  const answeredCount = Object.values(answers).filter((a) => a.trim()).length;
+  const reset = () => {
+    setPhase('setup');
+    setQuestions([]);
+    setAnswers({});
+    setResult(null);
+    setError('');
+  };
+
+  const answeredCount = questions.filter((q) => (answers[q.id] || '').trim()).length;
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="max-w-3xl mx-auto">
-        {error && (
-          <div className="mb-4 rounded-lg bg-red-50 dark:bg-red-900/20 p-3 text-sm text-red-600 dark:text-red-400">
-            {error}
-          </div>
-        )}
+    <Page width="narrow">
+      <PageHeader
+        title="Assessment"
+        description="Answer a short set of questions so edOS can measure what you actually understand."
+      />
 
-        {/* Setup Phase */}
-        {phase === 'setup' && (
-          <div className="card space-y-6">
-            <div className="text-center space-y-2">
-              <h2 className="text-xl font-bold">Take an Assessment</h2>
-              <p className="text-sm text-gray-500">
-                Test your understanding. AI generates questions based on your chosen topic.
-              </p>
-            </div>
+      {error && <Alert>{error}</Alert>}
 
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Topic</label>
-                {concepts.length > 0 ? (
-                  <select
-                    value={topic}
-                    onChange={(e) => setTopic(e.target.value)}
-                    className="input"
-                  >
-                    <option value="">Select a topic or type below...</option>
-                    {concepts.map((c) => (
-                      <option key={c.id} value={c.name}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                <input
-                  type="text"
-                  value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
-                  className="input"
-                  placeholder="e.g., Neural Networks, React Hooks, Pandas..."
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Difficulty</label>
-                <div className="flex gap-2">
-                  {['beginner', 'intermediate', 'advanced'].map((d) => (
-                    <button
-                      key={d}
-                      onClick={() => setDifficulty(d)}
-                      className={`px-4 py-2 rounded-lg text-sm capitalize transition-all ${
-                        difficulty === d
-                          ? 'bg-primary-600 text-white'
-                          : 'bg-gray-100 dark:bg-dark-tertiary text-gray-700 dark:text-gray-300 hover:bg-gray-200'
-                      }`}
-                    >
-                      {d}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={generateAssessment}
-              className="btn-primary w-full"
-              disabled={!topic.trim()}
+      {phase === 'setup' && (
+        <Card className="space-y-5">
+          {concepts.length > 0 && (
+            <Select
+              label="Pick a tracked topic"
+              value={concepts.some((c) => c.name === topic) ? topic : ''}
+              onChange={(e) => setTopic(e.target.value)}
             >
-              Generate Assessment
-            </button>
+              <option value="">Choose a concept…</option>
+              {concepts.map((c) => (
+                <option key={c.id} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          )}
+
+          <Input
+            label="Or enter any topic"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder="React hooks, gradient descent, database indexing…"
+          />
+
+          <div className="space-y-1.5">
+            <p className="text-2xs font-medium text-gray-500 dark:text-gray-400">Difficulty</p>
+            <Segmented
+              aria-label="Difficulty"
+              value={difficulty}
+              onChange={setDifficulty}
+              options={[
+                { value: 'beginner', label: 'Beginner' },
+                { value: 'intermediate', label: 'Intermediate' },
+                { value: 'advanced', label: 'Advanced' },
+              ]}
+            />
           </div>
-        )}
 
-        {/* Loading Phase */}
-        {phase === 'loading' && (
-          <div className="card text-center py-12 space-y-4">
-            <div className="animate-pulse">
-              <div className="w-12 h-12 rounded-full bg-primary-100 dark:bg-primary-900/30 mx-auto flex items-center justify-center">
-                <span className="text-2xl">🧠</span>
-              </div>
-            </div>
-            <p className="text-gray-500">Generating questions about <strong>{topic}</strong>...</p>
-            <p className="text-xs text-gray-400">Using AI to create contextual assessment</p>
-          </div>
-        )}
+          <Button variant="primary" block onClick={generateAssessment} disabled={!topic.trim()}>
+            Generate 5 questions
+          </Button>
+        </Card>
+      )}
 
-        {/* Questions Phase */}
-        {phase === 'questions' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold">{topic} — {difficulty}</h2>
-              <span className="text-sm text-gray-500">
-                {answeredCount}/{questions.length} answered
-              </span>
-            </div>
+      {phase === 'loading' && (
+        <Card className="py-14 text-center">
+          <p className="text-sm text-gray-900 dark:text-gray-100">Writing questions on {topic}</p>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">This takes a few seconds.</p>
+        </Card>
+      )}
 
-            {questions.map((q, idx) => (
-              <div key={q.id} className="card space-y-3">
-                <div className="flex items-start gap-3">
-                  <span className="flex-shrink-0 w-7 h-7 rounded-full bg-primary-50 dark:bg-primary-900/30 text-primary-600 flex items-center justify-center text-sm font-medium">
-                    {idx + 1}
-                  </span>
-                  <div className="flex-1 space-y-3">
-                    <p className="text-sm font-medium leading-relaxed">{q.text}</p>
+      {phase === 'questions' && (
+        <div className="space-y-5">
+          <Section
+            title={topic}
+            description={`${difficulty} · ${answeredCount} of ${questions.length} answered`}
+          >
+            <ProgressBar
+              value={questions.length ? (answeredCount / questions.length) * 100 : 0}
+              label="Answered"
+            />
+          </Section>
 
-                    {q.options && q.options.length > 0 ? (
-                      <div className="space-y-2">
-                        {q.options.map((opt, optIdx) => (
-                          <button
-                            key={optIdx}
-                            onClick={() => setAnswers({ ...answers, [q.id]: opt })}
-                            className={`w-full text-left px-4 py-2.5 rounded-lg text-sm border transition-all ${
-                              answers[q.id] === opt
-                                ? 'border-primary-500 bg-primary-50 dark:bg-primary-900/20 text-primary-700 dark:text-primary-300'
-                                : 'border-gray-200 dark:border-gray-700 hover:border-gray-300'
-                            }`}
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      <textarea
-                        value={answers[q.id] || ''}
-                        onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
-                        className="input min-h-[100px] resize-y"
-                        placeholder="Type your answer here..."
-                      />
-                    )}
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setPhase('setup'); setQuestions([]); setAnswers({}); }}
-                className="btn-secondary flex-1"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitAssessment}
-                className="btn-primary flex-1"
-                disabled={answeredCount === 0}
-              >
-                Submit ({answeredCount}/{questions.length})
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Submitting Phase */}
-        {phase === 'submitting' && (
-          <div className="card text-center py-12 space-y-4">
-            <div className="animate-pulse">
-              <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 mx-auto flex items-center justify-center">
-                <span className="text-2xl">✓</span>
-              </div>
-            </div>
-            <p className="text-gray-500">Scoring your answers...</p>
-          </div>
-        )}
-
-        {/* Results Phase */}
-        {phase === 'results' && result && (
-          <div className="space-y-6">
-            <div className="card text-center space-y-4">
-              <h2 className="text-xl font-bold">Assessment Complete</h2>
-              <div className="flex items-center justify-center gap-2">
-                <span className="text-5xl font-bold text-primary-600">
-                  {Math.round((result.score / result.maxScore) * 100)}%
-                </span>
-              </div>
-              <p className="text-sm text-gray-500">
-                Score: {result.score} / {result.maxScore}
+          {questions.map((q, idx) => (
+            <Card key={q.id} className="space-y-3">
+              <p className="text-2xs tabular-nums text-gray-500 dark:text-gray-400">
+                {idx + 1} of {questions.length}
               </p>
-              {result.feedback && (
-                <p className="text-sm text-gray-600 dark:text-gray-400 bg-surface-tertiary dark:bg-dark-tertiary rounded-lg p-4">
-                  {result.feedback}
-                </p>
-              )}
-            </div>
+              <p className="text-sm leading-relaxed text-gray-900 dark:text-gray-100">{q.text}</p>
 
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setPhase('setup'); setTopic(''); setResult(null); }}
-                className="btn-secondary flex-1"
-              >
-                Take Another
-              </button>
-              <button
-                onClick={() => router.push('/dashboard')}
-                className="btn-primary flex-1"
-              >
-                Back to Dashboard
-              </button>
-            </div>
+              {q.options && q.options.length > 0 ? (
+                <div className="space-y-2" role="radiogroup" aria-label={`Answer to question ${idx + 1}`}>
+                  {q.options.map((opt) => {
+                    const selected = answers[q.id] === opt;
+                    return (
+                      <button
+                        key={opt}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => setAnswers({ ...answers, [q.id]: opt })}
+                        className={`w-full rounded-lg border px-3.5 py-2.5 text-left text-sm transition-colors ${
+                          selected
+                            ? 'border-gray-900 bg-gray-50 text-gray-900 dark:border-gray-100 dark:bg-dark-tertiary dark:text-gray-100'
+                            : 'text-gray-700 hover:border-gray-300 dark:text-gray-300 dark:hover:border-gray-700'
+                        }`}
+                      >
+                        {opt}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <Textarea
+                  value={answers[q.id] || ''}
+                  onChange={(e) => setAnswers({ ...answers, [q.id]: e.target.value })}
+                  placeholder="Your answer"
+                  aria-label={`Answer to question ${idx + 1}`}
+                />
+              )}
+            </Card>
+          ))}
+
+          <div className="flex gap-2">
+            <Button onClick={reset} className="flex-1">
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              className="flex-1"
+              onClick={submitAssessment}
+              disabled={answeredCount === 0}
+            >
+              Submit {answeredCount} of {questions.length}
+            </Button>
           </div>
-        )}
-      </div>
-    </div>
+        </div>
+      )}
+
+      {phase === 'submitting' && (
+        <Card className="py-14 text-center">
+          <p className="text-sm text-gray-900 dark:text-gray-100">Scoring your answers</p>
+        </Card>
+      )}
+
+      {phase === 'results' && result && (
+        <div className="space-y-5">
+          <Card className="py-10 text-center">
+            <p className="text-2xs text-gray-500 dark:text-gray-400">Your score</p>
+            <p className="mt-1.5 text-5xl font-semibold tabular-nums text-gray-900 dark:text-gray-50">
+              {result.maxScore ? Math.round((result.score / result.maxScore) * 100) : 0}%
+            </p>
+            <p className="mt-1.5 text-xs tabular-nums text-gray-500 dark:text-gray-400">
+              {result.score} of {result.maxScore} points
+            </p>
+            {result.feedback && (
+              <p className="mx-auto mt-5 max-w-md text-sm leading-relaxed text-gray-600 dark:text-gray-400">
+                {result.feedback}
+              </p>
+            )}
+          </Card>
+
+          <div className="flex gap-2">
+            <Button onClick={reset} className="flex-1">
+              Take another
+            </Button>
+            <Button variant="primary" className="flex-1" onClick={() => router.push('/dashboard')}>
+              Back to dashboard
+            </Button>
+          </div>
+        </div>
+      )}
+    </Page>
   );
 }

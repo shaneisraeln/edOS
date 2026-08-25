@@ -51,7 +51,8 @@
         "quiz-popup.html",
         "quiz-popup.js",
         "quiz-popup.css",
-        "config.js"
+        "config.js",
+        "session.js"
       ],
       "matches": ["<all_urls>"]
     }

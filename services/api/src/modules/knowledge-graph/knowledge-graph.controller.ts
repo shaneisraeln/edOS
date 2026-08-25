@@ -17,12 +17,16 @@ export class KnowledgeGraphController {
     return this.graphService.getConcepts();
   }
 
+  /**
+   * Record that the learner engaged with a concept.
+   *
+   * Deliberately accepts only a conceptId. Mastery, confidence and weakness are
+   * derived from graded evidence server-side and are not settable by a client —
+   * this endpoint previously wrote whatever numbers the caller sent.
+   */
   @Post('update')
-  updateNode(
-    @Req() req: any,
-    @Body() body: { conceptId: string; confidence?: number; mastery?: number; assessmentScore?: number; weaknessScore?: number },
-  ) {
-    return this.graphService.updateNode(req.user.sub, body.conceptId, body);
+  recordInteraction(@Req() req: any, @Body() body: { conceptId: string }) {
+    return this.graphService.recordInteraction(req.user.sub, body.conceptId);
   }
 
   @Post('concepts')

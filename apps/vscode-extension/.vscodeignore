@@ -1,0 +1,8 @@
+// Only the compiled extension needs to ship. Without this file vsce packages
+// the TypeScript sources and build config too.
+.vscode/**
+node_modules/**
+src/**
+out/**/*.map
+tsconfig.json
+*.vsix

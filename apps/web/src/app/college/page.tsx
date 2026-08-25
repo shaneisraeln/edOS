@@ -3,6 +3,18 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import {
+  Alert,
+  Card,
+  EmptyState,
+  List,
+  ListRow,
+  Page,
+  PageHeader,
+  PageLoading,
+  ProgressBar,
+  Section,
+} from '@/components/ui';
 
 export default function CollegeDashboard() {
   const router = useRouter();
@@ -10,8 +22,11 @@ export default function CollegeDashboard() {
   const [weaknesses, setWeaknesses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<any>(null);
+  const [error, setError] = useState('');
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const load = async () => {
     try {
@@ -21,72 +36,144 @@ export default function CollegeDashboard() {
       ]);
       setStudents(stuData.students || []);
       setWeaknesses(weakData || []);
-    } catch (e: any) {
-      if (e.message?.includes('403')) { router.push('/dashboard'); }
-    } finally { setLoading(false); }
+    } catch (err: any) {
+      if (err.message?.includes('403')) {
+        router.push('/dashboard');
+        return;
+      }
+      setError(err.message || 'Could not load the roster');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadStudent = async (id: string) => {
-    const detail = await api.request<any>(`/college/students/${id}`);
-    setSelected(detail);
+    setError('');
+    try {
+      setSelected(await api.request<any>(`/college/students/${id}`));
+    } catch (err: any) {
+      setError(err.message || 'Could not load that student');
+    }
   };
 
-  if (loading) return <main className="flex min-h-screen items-center justify-center"><div className="w-8 h-8 border-2 border-primary-600 border-t-transparent rounded-full animate-spin" /></main>;
+  if (loading) return <PageLoading />;
 
   return (
-    <main className="min-h-screen bg-surface-secondary dark:bg-dark p-6">
-      <header className="flex items-center justify-between mb-8 max-w-6xl mx-auto">
-        <button onClick={() => router.push('/dashboard')} className="text-sm text-gray-500">← Dashboard</button>
-        <h1 className="text-lg font-semibold">Faculty Dashboard</h1>
-        <div />
-      </header>
+    <Page width="wide">
+      <PageHeader
+        title="Faculty"
+        description="Cohort progress and the topics the class is struggling with."
+        backTo={{ href: '/dashboard', label: 'Dashboard' }}
+      />
 
-      <div className="max-w-6xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-4">
-          <div className="card">
-            <h2 className="font-semibold mb-3">Students ({students.length})</h2>
-            <div className="space-y-2">
-              {students.map((s: any) => (
-                <button key={s.id} onClick={() => loadStudent(s.id)} className="w-full text-left p-3 rounded-lg hover:bg-surface-tertiary dark:hover:bg-dark-tertiary transition-colors">
-                  <div className="flex justify-between">
-                    <div><p className="text-sm font-medium">{s.name}</p><p className="text-xs text-gray-400">{s.email}</p></div>
-                    <div className="text-right">
-                      <p className="text-sm font-bold text-primary-600">{s.averageMastery}%</p>
-                      <p className="text-xs text-gray-400">{s.conceptCount} concepts</p>
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
+      {error && <Alert>{error}</Alert>}
 
-          <div className="card">
-            <h2 className="font-semibold mb-3">Class-Wide Weaknesses</h2>
-            {weaknesses.length > 0 ? weaknesses.slice(0, 10).map((w: any, i: number) => (
-              <div key={i} className="flex justify-between text-sm py-1.5 border-b border-gray-100 dark:border-gray-800 last:border-0">
-                <span>{w.topic}</span>
-                <span className="text-orange-500 font-medium">{Math.round(parseFloat(w.avgWeakness))}% weak</span>
-              </div>
-            )) : <p className="text-sm text-gray-400">No data yet</p>}
-          </div>
+      <div className="grid gap-5 lg:grid-cols-3">
+        <div className="space-y-6 lg:col-span-2">
+          <Section title={`Students (${students.length})`}>
+            {students.length === 0 ? (
+              <EmptyState icon="users" title="No students yet" />
+            ) : (
+              <List>
+                {students.map((s: any) => (
+                  <ListRow
+                    key={s.id}
+                    onClick={() => loadStudent(s.id)}
+                    className={selected?.student?.id === s.id ? 'bg-gray-50 dark:bg-dark-tertiary' : undefined}
+                  >
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm text-gray-900 dark:text-gray-100">
+                        {s.name}
+                      </span>
+                      <span className="mt-0.5 block truncate text-2xs text-gray-500 dark:text-gray-400">
+                        {s.email}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-right">
+                      <span className="block text-sm font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                        {Math.round(s.averageMastery ?? 0)}%
+                      </span>
+                      <span className="block text-2xs tabular-nums text-gray-500 dark:text-gray-400">
+                        {s.conceptCount} concepts
+                      </span>
+                    </span>
+                  </ListRow>
+                ))}
+              </List>
+            )}
+          </Section>
+
+          <Section
+            title="Class-wide weak spots"
+            description="Topics with the highest average weakness across the cohort."
+          >
+            {weaknesses.length === 0 ? (
+              <Card>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Not enough data yet.</p>
+              </Card>
+            ) : (
+              <List>
+                {weaknesses.slice(0, 10).map((w: any, i: number) => {
+                  const value = Math.round(parseFloat(w.avgWeakness));
+                  return (
+                    <ListRow key={i}>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-gray-900 dark:text-gray-100">
+                          {w.topic}
+                        </span>
+                        <span className="mt-1.5 block">
+                          <ProgressBar value={value} label={`${w.topic} weakness`} />
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-medium tabular-nums text-gray-900 dark:text-gray-100">
+                        {value}%
+                      </span>
+                    </ListRow>
+                  );
+                })}
+              </List>
+            )}
+          </Section>
         </div>
 
         <div>
-          {selected ? (
-            <div className="card sticky top-6 space-y-3">
-              <h3 className="font-semibold">{selected.student?.name}</h3>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between"><span className="text-gray-500">Avg Mastery</span><span className="font-bold">{selected.stats?.averageMastery}%</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Concepts</span><span>{selected.stats?.totalConcepts}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Strong</span><span className="text-green-600">{selected.stats?.strongConcepts}</span></div>
-                <div className="flex justify-between"><span className="text-gray-500">Weak</span><span className="text-orange-500">{selected.stats?.weakConcepts}</span></div>
-              </div>
-            </div>
-          ) : (
-            <div className="card text-center py-8"><p className="text-sm text-gray-400">Select a student</p></div>
-          )}
+          <div className="lg:sticky lg:top-6">
+            {selected ? (
+              <Card className="space-y-4">
+                <div>
+                  <h2 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    {selected.student?.name}
+                  </h2>
+                  <p className="mt-0.5 text-2xs text-gray-500 dark:text-gray-400">
+                    {selected.student?.email}
+                  </p>
+                </div>
+                <dl className="space-y-2 text-xs">
+                  <Row label="Average mastery" value={`${Math.round(selected.stats?.averageMastery ?? 0)}%`} />
+                  <Row label="Concepts tracked" value={String(selected.stats?.totalConcepts ?? 0)} />
+                  <Row label="Strong" value={String(selected.stats?.strongConcepts ?? 0)} />
+                  <Row label="Weak" value={String(selected.stats?.weakConcepts ?? 0)} />
+                </dl>
+              </Card>
+            ) : (
+              <Card className="py-10 text-center">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Select a student to see their detail.
+                </p>
+              </Card>
+            )}
+          </div>
         </div>
       </div>
-    </main>
+    </Page>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-gray-500 dark:text-gray-400">{label}</dt>
+      <dd className="font-medium tabular-nums text-gray-900 dark:text-gray-100">{value}</dd>
+    </div>
   );
 }

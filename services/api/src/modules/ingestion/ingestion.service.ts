@@ -5,6 +5,7 @@ import { LearningEventEntity } from '../../entities/learning-event.entity';
 import { LearningSessionEntity } from '../../entities/learning-session.entity';
 import { AIService } from '../ai/ai.service';
 import { KnowledgeGraphService } from '../knowledge-graph/knowledge-graph.service';
+import { SessionService } from '../session/session.service';
 import { IngestEventDto } from './ingestion.controller';
 
 @Injectable()
@@ -18,35 +19,23 @@ export class IngestionService {
     private readonly sessionRepo: Repository<LearningSessionEntity>,
     private readonly aiService: AIService,
     private readonly graphService: KnowledgeGraphService,
+    private readonly sessions: SessionService,
   ) {}
 
   async ingestBatch(userId: string, events: IngestEventDto[]) {
     const errors: string[] = [];
     let accepted = 0;
 
-    // Ensure there's an active session (or create one)
-    let sessionId = events[0]?.sessionId;
-    if (!sessionId) {
-      const activeSession = await this.sessionRepo.findOne({
-        where: { userId, status: 'active' },
-        order: { startTime: 'DESC' },
-      });
-      if (activeSession) {
-        sessionId = activeSession.id;
-      } else {
-        // Auto-create a session from the first event
-        const topic = events.find((e) => e.topic)?.topic || 'General Learning';
-        const newSession = await this.sessionRepo.save(
-          this.sessionRepo.create({
-            userId,
-            topic,
-            startTime: new Date(),
-            status: 'active',
-          }),
-        );
-        sessionId = newSession.id;
-      }
-    }
+    // Attach to the learner's shared session if one is running.
+    //
+    // This no longer invents a session. Auto-creating one meant a stray event
+    // from a background agent silently opened a session the learner never
+    // started, and because the lookup was "newest active session wins", later
+    // events from other surfaces were filed under it too. Events without a
+    // session are still stored — they just are not attributed to a study
+    // session that does not exist.
+    const active = await this.sessions.findActive(userId);
+    const sessionId = active?.id ?? null;
 
     for (const event of events) {
       try {
@@ -67,14 +56,27 @@ export class IngestionService {
       }
     }
 
+    // Credit each surface for what it contributed, so the session UI can show
+    // which agents are actually producing signal rather than merely connected.
+    if (sessionId && accepted > 0) {
+      const perSurface = new Map<string, number>();
+      for (const event of events) {
+        if (!event.source) continue;
+        perSurface.set(event.source, (perSurface.get(event.source) ?? 0) + 1);
+      }
+      for (const [surface, count] of perSurface) {
+        await this.sessions.recordSurfaceActivity(sessionId, surface, count);
+      }
+    }
+
     // Trigger async context processing if enough events accumulated
-    if (accepted >= 3) {
+    if (sessionId && accepted >= 3) {
       this.processEventsAsync(userId, sessionId).catch((err) =>
         this.logger.error(`Async processing failed: ${err.message}`),
       );
     }
 
-    return { accepted, errors };
+    return { accepted, errors, sessionId };
   }
 
   async heartbeat(

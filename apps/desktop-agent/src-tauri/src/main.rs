@@ -17,6 +17,7 @@ lazy_static::lazy_static! {
     static ref APP_STATE: AppState = AppState::default();
     static ref EVENT_QUEUE: EventQueue = EventQueue::default();
     static ref MONITOR_STATE: MonitorState = MonitorState::default();
+    static ref SESSION_MANAGER: SessionManager = SessionManager::default();
 }
 
 fn main() {
@@ -57,7 +58,7 @@ fn main() {
         .manage(&*APP_STATE as &'static AppState)
         .manage(&*EVENT_QUEUE as &'static EventQueue)
         .manage(&*MONITOR_STATE as &'static MonitorState)
-        .manage(SessionManager::default())
+        .manage(&*SESSION_MANAGER as &'static SessionManager)
         .on_window_event(|event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
                 if event.window().label() == "main" {
@@ -72,6 +73,7 @@ fn main() {
             auth::get_status,
             session::start_session,
             session::end_session,
+            session::get_session,
             events::get_queue_size,
             events::get_recent_events,
             monitor::get_current_window,
@@ -81,10 +83,23 @@ fn main() {
         .expect("error building app")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Ready = event {
-                // Start monitor and sync AFTER the app is fully built
+                // Both loops start once the app is built. They are safe to run
+                // before sign-in because each is gated on there being an active
+                // session the agent has joined.
                 let handle = app_handle.clone();
-                monitor::start_monitor(handle, &APP_STATE, &EVENT_QUEUE, &MONITOR_STATE);
-                sync::start_sync_loop(&APP_STATE, &EVENT_QUEUE);
+                monitor::start_monitor(
+                    handle,
+                    &APP_STATE,
+                    &EVENT_QUEUE,
+                    &MONITOR_STATE,
+                    &SESSION_MANAGER,
+                );
+                sync::start_sync_loop(
+                    app_handle.clone(),
+                    &APP_STATE,
+                    &EVENT_QUEUE,
+                    &SESSION_MANAGER,
+                );
             }
         });
 }

@@ -8,6 +8,10 @@ import { KnowledgeEdgeEntity } from '../../entities/knowledge-edge.entity';
 import { ConceptEntity } from '../../entities/concept.entity';
 import { LearningGoalEntity } from '../../entities/learning-goal.entity';
 import { AIService } from '../ai/ai.service';
+import { AnswerGraderService, stripAnswerKey } from '../scoring/answer-grader.service';
+import { MasteryService } from '../scoring/mastery.service';
+import { PASS_RATIO } from '../scoring/scoring.constants';
+import { StoredQuestion } from '../scoring/scoring.types';
 
 @Injectable()
 export class LearningPathService {
@@ -27,6 +31,8 @@ export class LearningPathService {
     @InjectRepository(LearningGoalEntity)
     private readonly goalRepo: Repository<LearningGoalEntity>,
     private readonly aiService: AIService,
+    private readonly grader: AnswerGraderService,
+    private readonly mastery: MasteryService,
   ) {}
 
   /** Use AI to generate a structured learning path AND register it as a full curriculum */
@@ -243,7 +249,11 @@ Rules:
     node.status = 'in_progress';
     await this.nodeRepo.save(node);
 
-    return { quizId: assessment.id, topic: node.title, questions };
+    return {
+      quizId: assessment.id,
+      topic: node.title,
+      questions: stripAnswerKey(questions as Record<string, unknown>[]),
+    };
   }
 
   /** Score the verification quiz and update path progress */
@@ -260,29 +270,65 @@ Rules:
     const assessment = await this.assessmentRepo.findOne({ where: { id: quizId, userId } });
     if (!assessment) throw new NotFoundException('Quiz not found');
 
-    // Score with AI
-    const scoring = await this.aiService.scoreAssessment({
-      questions: assessment.questions,
+    const storedQuestions = (assessment.questions || []) as StoredQuestion[];
+
+    const result = await this.grader.grade({
+      questions: storedQuestions,
       answers,
       topic: node.title,
     });
 
-    assessment.score = scoring.totalScore;
+    assessment.score = result.totalScore;
+    assessment.maxScore = result.gradableMaxScore || result.declaredMaxScore;
     assessment.status = 'completed';
     assessment.completedAt = new Date();
-    assessment.feedback = scoring.feedback;
+    assessment.feedback = result.feedback;
+
+    const gradeById = new Map(result.questions.map((q) => [q.questionId, q]));
+    assessment.questions = storedQuestions.map((q) => {
+      const grade = gradeById.get(q.id);
+      return grade ? { ...q, score: grade.score, feedback: grade.feedback, correct: grade.correct } : q;
+    });
     await this.assessmentRepo.save(assessment);
 
-    const percentage = assessment.maxScore > 0 ? (scoring.totalScore / assessment.maxScore) * 100 : 0;
+    // A grading outage must not silently fail the learner's step.
+    if (result.percentage === null) {
+      node.status = 'available';
+      await this.nodeRepo.save(node);
+      return {
+        passed: false,
+        score: result.totalScore,
+        maxScore: assessment.maxScore,
+        percentage: null,
+        feedback: result.feedback,
+        nodeStatus: node.status,
+        degraded: true,
+      };
+    }
 
-    // Need 60% to pass
-    if (percentage >= 60) {
+    const percentage = result.percentage;
+    const passed = percentage >= PASS_RATIO * 100;
+
+    // Record the attempt either way. Previously a failed verification wrote
+    // nothing at all, so struggling with a step left no trace in the graph and
+    // the concept never showed up as weak.
+    if (node.conceptId) {
+      await this.mastery.recordEvidence({
+        userId,
+        conceptId: node.conceptId,
+        kind: 'path_verification',
+        scoreFraction: percentage / 100,
+        difficulty: assessment.difficulty,
+        isReview: true,
+      });
+    }
+
+    if (passed) {
       node.status = 'verified';
       node.score = percentage;
       node.verifiedAt = new Date();
       await this.nodeRepo.save(node);
 
-      // Unlock next node
       const nextNode = await this.nodeRepo.findOne({
         where: { pathId, order: node.order + 1 },
       });
@@ -291,46 +337,28 @@ Rules:
         await this.nodeRepo.save(nextNode);
       }
 
-      // Update knowledge graph
-      if (node.conceptId) {
-        let kNode = await this.knowledgeRepo.findOne({ where: { userId, conceptId: node.conceptId } });
-        if (!kNode) {
-          kNode = this.knowledgeRepo.create({
-            userId, conceptId: node.conceptId,
-            confidence: percentage, mastery: percentage,
-            weaknessScore: Math.max(0, 100 - percentage),
-            practiceCount: 1, lastRevision: new Date(), revisionCount: 1,
-          });
-        } else {
-          kNode.mastery = Math.round(kNode.mastery * 0.3 + percentage * 0.7);
-          kNode.confidence = Math.round(kNode.confidence * 0.3 + percentage * 0.7);
-          kNode.weaknessScore = Math.max(0, 100 - kNode.mastery);
-          kNode.practiceCount += 1;
-          kNode.lastRevision = new Date();
-        }
-        await this.knowledgeRepo.save(kNode);
-      }
-
-      // Check if path is complete
       const allNodes = await this.nodeRepo.find({ where: { pathId } });
-      const allVerified = allNodes.every((n) => n.status === 'verified');
-      if (allVerified) {
+      if (allNodes.every((n) => n.status === 'verified')) {
         const path = await this.pathRepo.findOne({ where: { id: pathId } });
-        if (path) { path.status = 'completed'; path.progress = 100; await this.pathRepo.save(path); }
+        if (path) {
+          path.status = 'completed';
+          path.progress = 100;
+          await this.pathRepo.save(path);
+        }
       }
     } else {
-      // Failed — stay available for retry
       node.status = 'available';
       await this.nodeRepo.save(node);
     }
 
     return {
-      passed: percentage >= 60,
-      score: scoring.totalScore,
+      passed,
+      score: result.totalScore,
       maxScore: assessment.maxScore,
       percentage: Math.round(percentage),
-      feedback: scoring.feedback,
+      feedback: result.feedback,
       nodeStatus: node.status,
+      degraded: result.degraded,
     };
   }
 

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { ConceptEntity } from '../../entities/concept.entity';
 import { KnowledgeNodeEntity } from '../../entities/knowledge-node.entity';
 import { KnowledgeEdgeEntity } from '../../entities/knowledge-edge.entity';
+import { MasteryService } from '../scoring/mastery.service';
 
 @Injectable()
 export class KnowledgeGraphService {
@@ -14,6 +15,7 @@ export class KnowledgeGraphService {
     private readonly nodeRepo: Repository<KnowledgeNodeEntity>,
     @InjectRepository(KnowledgeEdgeEntity)
     private readonly edgeRepo: Repository<KnowledgeEdgeEntity>,
+    private readonly mastery: MasteryService,
   ) {}
 
   async getUserGraph(userId: string) {
@@ -40,36 +42,24 @@ export class KnowledgeGraphService {
     return this.conceptRepo.find({ relations: ['childConcepts'] });
   }
 
-  async updateNode(
-    userId: string,
-    conceptId: string,
-    updates: Partial<{
-      confidence: number;
-      mastery: number;
-      assessmentScore: number;
-      weaknessScore: number;
-      practiceCount: number;
-    }>,
-  ) {
-    let node = await this.nodeRepo.findOne({ where: { userId, conceptId } });
+  /**
+   * Record that the learner engaged with a concept.
+   *
+   * This replaces the old `updateNode`, which assigned mastery/confidence
+   * straight from the HTTP body. That let any authenticated caller set their own
+   * mastery to 100 and appear as a verified expert to recruiters. Mastery is now
+   * only ever derived from graded evidence inside MasteryService, so the worst a
+   * client can do here is claim they looked at something.
+   */
+  async recordInteraction(userId: string, conceptId: string) {
+    const concept = await this.conceptRepo.findOne({ where: { id: conceptId } });
+    if (!concept) throw new NotFoundException('Concept not found');
 
-    if (!node) {
-      // Create the node if it doesn't exist yet
-      node = this.nodeRepo.create({
-        userId,
-        conceptId,
-        ...updates,
-      });
-    } else {
-      Object.assign(node, updates);
-    }
-
-    if (updates.practiceCount !== undefined) {
-      node.lastRevision = new Date();
-      node.revisionCount += 1;
-    }
-
-    return this.nodeRepo.save(node);
+    return this.mastery.recordEvidence({
+      userId,
+      conceptId,
+      kind: 'exposure',
+    });
   }
 
   async createConcept(data: { name: string; description?: string; parentConceptId?: string; curriculumId?: string }) {
@@ -117,31 +107,21 @@ export class KnowledgeGraphService {
   }
 
   /**
-   * Touch a knowledge node — create it if it doesn't exist, or increment practice count.
-   * Called when the system detects a user has interacted with a concept.
+   * The ingestion pipeline saw the learner near this concept.
+   *
+   * Exposure is the weakest evidence there is, so it goes through the same
+   * model as everything else at a very low weight. It used to seed a node at
+   * mastery 5 / confidence 10 and then nudge confidence upward on every sighting,
+   * which meant leaving a docs tab open slowly manufactured confidence the
+   * learner had not earned.
    */
   async touchNode(userId: string, conceptId: string) {
-    let node = await this.nodeRepo.findOne({ where: { userId, conceptId } });
-
-    if (!node) {
-      node = this.nodeRepo.create({
-        userId,
-        conceptId,
-        confidence: 10,
-        mastery: 5,
-        weaknessScore: 80,
-        practiceCount: 1,
-        lastRevision: new Date(),
-        revisionCount: 1,
-      });
-    } else {
-      node.practiceCount += 1;
-      node.lastRevision = new Date();
-      // Slight confidence boost from exposure (capped)
-      node.confidence = Math.min(100, node.confidence + 2);
-    }
-
-    return this.nodeRepo.save(node);
+    return this.mastery.recordEvidence({
+      userId,
+      conceptId,
+      kind: 'exposure',
+      isReview: false,
+    });
   }
 
   /**
